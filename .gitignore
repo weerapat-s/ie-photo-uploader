@@ -1,0 +1,14 @@
+# build output
+build/
+dist/
+*.spec.bak
+__pycache__/
+*.pyc
+.venv/
+venv/
+.pytest_cache/
+# local runtime data (never commit codes or personal data)
+state.json
+settings.json
+*.log
+.env
