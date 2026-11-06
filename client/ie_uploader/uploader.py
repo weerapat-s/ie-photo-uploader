@@ -1,0 +1,100 @@
+"""Talks to /apps/iephoto_watermark/desktop/* on the IE-PHOTO Nextcloud."""
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass
+
+import requests
+
+from . import __version__
+
+PUBLIC_URL = "https://nextcloud.ienas.site"
+FAST_URL = "http://100.116.118.109:7580"   # Tailscale "ช่องทางด่วน"
+RETRY_DELAYS = (5, 15, 45)
+TRANSIENT_STATUS = {429, 500, 502, 503, 504, 520, 521, 522, 523, 524, 530}
+
+
+class AuthError(Exception):
+    """Code wrong, expired or revoked: stop the whole run."""
+
+
+class TransientError(Exception):
+    """Network or server down after all retries: pause and try later."""
+
+
+@dataclass
+class UploadResult:
+    ok: bool
+    name: str | None = None
+    duplicate: bool = False
+    error: str | None = None
+
+
+def pick_base_url(probe=requests.get) -> str:
+    try:
+        if probe(FAST_URL + "/status.php", timeout=1.5).status_code == 200:
+            return FAST_URL
+    except requests.RequestException:
+        pass
+    return PUBLIC_URL
+
+
+def _error_text(resp) -> str:
+    try:
+        return str(resp.json().get("error") or resp.status_code)
+    except ValueError:
+        return f"HTTP {resp.status_code}"
+
+
+class Client:
+    def __init__(self, base_url: str, code: str, session: requests.Session | None = None, sleep=time.sleep):
+        self.base = base_url.rstrip("/") + "/apps/iephoto_watermark/desktop"
+        self.code = code
+        self.session = session or requests.Session()
+        self.session.headers.update({"X-IEPhoto-Code": code, "User-Agent": f"IE-PHOTO-Uploader/{__version__}"})
+        self.sleep = sleep
+
+    def _send(self, method: str, url: str, **kw):
+        last = None
+        for attempt in range(len(RETRY_DELAYS) + 1):
+            try:
+                resp = self.session.request(method, url, timeout=(10, 180), **kw)
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                last = str(exc)
+            else:
+                if resp.status_code in (401, 403):
+                    raise AuthError(_error_text(resp))
+                if resp.status_code not in TRANSIENT_STATUS:
+                    return resp
+                last = f"HTTP {resp.status_code}"
+            if attempt < len(RETRY_DELAYS):
+                self.sleep(RETRY_DELAYS[attempt])
+            # Rewind file-like bodies before retrying.
+            for f in (kw.get("files") or {}).values():
+                if hasattr(f[1], "seek"):
+                    f[1].seek(0)
+        raise TransientError(last or "unreachable")
+
+    def config(self) -> dict:
+        resp = self._send("GET", self.base + "/config")
+        resp.raise_for_status()
+        return resp.json()
+
+    def logo(self, url_path: str) -> bytes:
+        root = self.base.split("/apps/")[0]
+        resp = self._send("GET", root + url_path)
+        resp.raise_for_status()
+        return resp.content
+
+    def upload(self, data: bytes, original_name: str, sha256: str, uploader: str, sport: str, position: str) -> UploadResult:
+        import io
+        resp = self._send(
+            "POST",
+            self.base + "/upload",
+            data={"sha256": sha256, "uploader": uploader, "sport": sport, "position": position, "originalName": original_name},
+            files={"photo": (original_name, io.BytesIO(data), "application/octet-stream")},
+        )
+        if resp.status_code == 200:
+            body = resp.json()
+            return UploadResult(ok=True, name=body.get("name"), duplicate=bool(body.get("duplicate")))
+        return UploadResult(ok=False, error=_error_text(resp))
