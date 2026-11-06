@@ -18,28 +18,65 @@ final class DesktopSeenLog {
         return $map[$sha256] ?? null;
     }
 
-    public function remember(string $codeId, string $sha256, string $name): void {
+    /**
+     * Run $fn while holding an exclusive lock for this code + sha bucket (first two hex chars,
+     * so at most 256 lock files per code). Serialises find -> store -> remember for one file.
+     */
+    public function locked(string $codeId, string $sha256, \Closure $fn): mixed {
         $this->validate($codeId, $sha256);
-        if (!is_dir($this->dir)) {
-            @mkdir($this->dir, 0770, true);
-        }
-        $file = $this->file($codeId);
-        $fp = fopen($file, 'c+');
+        $this->ensureDir();
+        $lockFile = rtrim($this->dir, '/') . '/' . $codeId . '-' . substr($sha256, 0, 2) . '.lock';
+        $fp = fopen($lockFile, 'c');
         if ($fp === false) {
-            throw new \RuntimeException('cannot open seen log');
+            throw new \RuntimeException('cannot open lock file');
         }
         try {
-            flock($fp, LOCK_EX);
-            $map = json_decode((string)stream_get_contents($fp), true);
-            $map = is_array($map) ? $map : [];
-            $map[$sha256] = $name;
-            ftruncate($fp, 0);
-            rewind($fp);
-            fwrite($fp, (string)json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES));
-            fflush($fp);
+            if (!flock($fp, LOCK_EX)) {
+                throw new \RuntimeException('cannot lock');
+            }
+            return $fn();
         } finally {
             flock($fp, LOCK_UN);
             fclose($fp);
+        }
+    }
+
+    public function remember(string $codeId, string $sha256, string $name): void {
+        $this->validate($codeId, $sha256);
+        $this->ensureDir();
+        $file = $this->file($codeId);
+        $lock = fopen(rtrim($this->dir, '/') . '/' . $codeId . '.maplock', 'c');
+        if ($lock === false) {
+            throw new \RuntimeException('cannot open seen log lock');
+        }
+        $tmp = null;
+        try {
+            if (!flock($lock, LOCK_EX)) {
+                throw new \RuntimeException('cannot lock seen log');
+            }
+            $map = $this->read($file);
+            $map[$sha256] = $name;
+            $tmp = $file . '.' . bin2hex(random_bytes(6)) . '.tmp';
+            $json = json_encode($map, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if ($json === false || file_put_contents($tmp, $json) === false) {
+                throw new \RuntimeException('cannot write seen log');
+            }
+            if (!rename($tmp, $file)) {
+                throw new \RuntimeException('cannot replace seen log');
+            }
+            $tmp = null;
+        } finally {
+            if ($tmp !== null && is_file($tmp)) {
+                @unlink($tmp);
+            }
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
+    private function ensureDir(): void {
+        if (!is_dir($this->dir)) {
+            @mkdir($this->dir, 0770, true);
         }
     }
 

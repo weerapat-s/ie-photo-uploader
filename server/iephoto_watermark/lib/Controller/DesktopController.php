@@ -13,6 +13,7 @@ use OCP\AppFramework\Http\Attribute\NoCSRFRequired;
 use OCP\AppFramework\Http\Attribute\PublicPage;
 use OCP\AppFramework\Http\JSONResponse;
 use OCP\IRequest;
+use Psr\Log\LoggerInterface;
 
 /** Endpoints for the IE-PHOTO Uploader desktop app. Auth = per-event code in X-IEPhoto-Code. */
 final class DesktopController extends Controller {
@@ -24,6 +25,7 @@ final class DesktopController extends Controller {
         private UploadService $uploads,
         private DesktopCodeStore $codes,
         private DesktopSeenLog $seen,
+        private LoggerInterface $logger,
     ) {
         parent::__construct($appName, $request);
     }
@@ -71,7 +73,11 @@ final class DesktopController extends Controller {
             return new JSONResponse(['error' => 'invalid_code'], 401);
         }
         $file = $this->request->getUploadedFile('photo');
-        if (!is_array($file) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK || !is_string($file['tmp_name'] ?? null)) {
+        $err = is_array($file) ? ($file['error'] ?? UPLOAD_ERR_NO_FILE) : UPLOAD_ERR_NO_FILE;
+        if ($err === UPLOAD_ERR_INI_SIZE || $err === UPLOAD_ERR_FORM_SIZE) {
+            return new JSONResponse(['error' => 'ไฟล์ใหญ่เกิน 95MB'], 413);
+        }
+        if (!is_array($file) || $err !== UPLOAD_ERR_OK || !is_string($file['tmp_name'] ?? null)) {
             return new JSONResponse(['error' => 'ไม่พบไฟล์ที่อัปโหลด'], 422);
         }
         if ((int)($file['size'] ?? 0) > self::MAX_BYTES) {
@@ -81,23 +87,35 @@ final class DesktopController extends Controller {
         if (preg_match('/^[a-f0-9]{64}$/', $sha) !== 1) {
             return new JSONResponse(['error' => 'sha256 ไม่ถูกต้อง'], 422);
         }
-        $existing = $this->seen->find((string)$record['id'], $sha);
-        if ($existing !== null) {
-            return new JSONResponse(['name' => $existing, 'duplicate' => true]);
-        }
+        $codeId = (string)$record['id'];
         $album = (string)($record['album'] ?? '') !== '' ? (string)$record['album'] : (string)$this->request->getParam('sport', '');
         try {
-            $stored = $this->uploads->storeDesktopUpload(
-                $file['tmp_name'],
-                (string)$this->request->getParam('originalName', (string)($file['name'] ?? 'photo.jpg')),
-                (string)$this->request->getParam('uploader', ''),
-                $album,
-                (string)$this->request->getParam('position', 'top-left'),
-            );
+            return $this->seen->locked($codeId, $sha, function () use ($codeId, $sha, $file, $album): JSONResponse {
+                $existing = $this->seen->find($codeId, $sha);
+                if ($existing !== null) {
+                    return new JSONResponse(['name' => $existing, 'duplicate' => true]);
+                }
+                $stored = $this->uploads->storeDesktopUpload(
+                    $file['tmp_name'],
+                    (string)$this->request->getParam('originalName', (string)($file['name'] ?? 'photo.jpg')),
+                    (string)$this->request->getParam('uploader', ''),
+                    $album,
+                    (string)$this->request->getParam('position', 'top-left'),
+                );
+                try {
+                    $this->seen->remember($codeId, $sha, $stored['name']);
+                } catch (\Throwable $e) {
+                    $this->logger->warning('iephoto_watermark: could not record desktop upload', ['exception' => $e]);
+                }
+                return new JSONResponse(['name' => $stored['name'], 'folder' => $stored['folder'], 'duplicate' => false]);
+            });
         } catch (\RuntimeException $e) {
             return new JSONResponse(['error' => $e->getMessage()], 422);
+        } catch (\OCP\Files\InvalidPathException | \OCP\Files\NotPermittedException | \OCP\Files\NotFoundException | \OCP\Files\GenericFileException $e) {
+            return new JSONResponse(['error' => 'บันทึกไฟล์ไม่สำเร็จ'], 422);
+        } catch (\Throwable $e) {
+            $this->logger->error('iephoto_watermark: desktop upload failed', ['exception' => $e]);
+            return new JSONResponse(['error' => 'เซิร์ฟเวอร์ขัดข้อง'], 500);
         }
-        $this->seen->remember((string)$record['id'], $sha, $stored['name']);
-        return new JSONResponse(['name' => $stored['name'], 'folder' => $stored['folder'], 'duplicate' => false]);
     }
 }
