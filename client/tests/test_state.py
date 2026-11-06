@@ -27,3 +27,34 @@ def test_state_path_is_per_code(tmp_path):
     b = state_path(tmp_path, "aaaaabbbbbcccccddddd")
     c = state_path(tmp_path, "ZZZZZ-BBBBB-CCCCC-DDDDD")
     assert a == b and a != c and a.parent == tmp_path
+
+
+def test_mark_retries_replace_on_permission_error(tmp_path, monkeypatch):
+    import os
+    from ie_uploader import state as st
+    monkeypatch.setattr(st.time, "sleep", lambda s: None)
+    real = os.replace
+    calls = []
+
+    def flaky(a, b):
+        calls.append(1)
+        if len(calls) <= 2:
+            raise PermissionError("locked")
+        return real(a, b)
+    monkeypatch.setattr(st.os, "replace", flaky)
+    p = tmp_path / "s.json"
+    State(p).mark("c" * 64, "x.jpg")
+    assert len(calls) == 3
+    assert json.loads(p.read_text(encoding="utf-8")) == {"c" * 64: "x.jpg"}
+
+
+def test_mark_never_raises_when_replace_keeps_failing(tmp_path, monkeypatch):
+    from ie_uploader import state as st
+    monkeypatch.setattr(st.time, "sleep", lambda s: None)
+
+    def always(a, b):
+        raise PermissionError("locked")
+    monkeypatch.setattr(st.os, "replace", always)
+    s = State(tmp_path / "s.json")
+    s.mark("d" * 64, "y.jpg")
+    assert s.done("d" * 64) == "y.jpg"

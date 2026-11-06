@@ -73,3 +73,39 @@ def test_pick_base_url_prefers_fast_when_reachable():
     def boom(url, timeout):
         raise requests.ConnectionError()
     assert up.pick_base_url(probe=boom) == up.PUBLIC_URL
+
+
+@responses.activate
+def test_chunked_encoding_error_is_retried():
+    responses.post(UPL, body=requests.exceptions.ChunkedEncodingError("cut"))
+    responses.post(UPL, json={"name": "n.jpg"})
+    slept = []
+    r = up.Client(BASE, "c", sleep=slept.append).upload(b"x", "a.jpg", "f" * 64, "a", "s", "top-left")
+    assert r.ok and slept == [5]
+
+
+@responses.activate
+def test_upload_200_with_html_body_is_failure():
+    responses.post(UPL, body="<html>proxy page</html>", status=200, content_type="text/html")
+    r = client().upload(b"x", "a.jpg", "f" * 64, "a", "s", "top-left")
+    assert not r.ok and r.error == "ตอบกลับจากเซิร์ฟเวอร์ไม่ถูกต้อง"
+
+
+@responses.activate
+def test_upload_200_without_name_is_failure():
+    responses.post(UPL, json={"duplicate": False})
+    assert not client().upload(b"x", "a.jpg", "f" * 64, "a", "s", "top-left").ok
+
+
+@responses.activate
+def test_upload_403_is_per_file_failure_not_auth_error():
+    responses.post(UPL, status=403, body="<html>WAF</html>")
+    r = client().upload(b"x", "a.jpg", "f" * 64, "a", "s", "top-left")
+    assert not r.ok and r.error == "HTTP 403"
+
+
+@responses.activate
+def test_config_403_raises_http_error_not_auth_error():
+    responses.get(CFG, status=403)
+    with pytest.raises(requests.HTTPError):
+        client().config()

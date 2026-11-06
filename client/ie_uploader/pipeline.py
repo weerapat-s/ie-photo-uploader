@@ -7,12 +7,17 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import watermark
 from .state import State
-from .uploader import AuthError, TransientError
+from .uploader import AuthError, TransientError, UploadResult
+
+MAX_PAUSES = 5
+POOL_DEAD_MSG = "โปรแกรมใส่ลายน้ำหยุดทำงาน (หน่วยความจำอาจไม่พอ)"
+GIVE_UP_MSG = "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่ภายหลัง"
 
 
 @dataclass
@@ -43,6 +48,7 @@ class Summary:
     auth_error: bool = False
     stopped: bool = False
     seconds: float = 0.0
+    error: str = ""
 
 
 def scan(folder) -> list[Path]:
@@ -78,52 +84,97 @@ class Pipeline:
         self.client = client
         self.state = state
         self.s = settings
-        self.workers = workers or max(1, (os.cpu_count() or 2) - 1)
+        self.workers = workers or min(max(1, (os.cpu_count() or 2) - 1), 4)
         self.upload_threads = upload_threads
         self.max_pending = max_pending
         self.emit = on_event
         self.pool_factory = pool_factory
         self.pause_seconds = pause_seconds
 
+    def _pause(self, stop: threading.Event, abort: threading.Event) -> None:
+        """Sleep pause_seconds in 0.2s slices; wake early on stop or abort."""
+        deadline = time.monotonic() + self.pause_seconds
+        while not (stop.is_set() or abort.is_set()):
+            left = deadline - time.monotonic()
+            if left <= 0:
+                return
+            time.sleep(min(0.2, left))
+
     def run(self, files: list[Path], stop: threading.Event) -> Summary:
         summary = Summary(total=len(files))
         started = time.monotonic()
+        try:
+            self._run(files, stop, summary)
+        finally:
+            summary.stopped = stop.is_set()
+            summary.seconds = time.monotonic() - started
+            self.emit(Event("finished", done=summary.uploaded, total=summary.total))
+        return summary
+
+    def _run(self, files: list[Path], stop: threading.Event, summary: Summary) -> None:
         lock = threading.Lock()
         slots = threading.Semaphore(self.max_pending)
         abort = threading.Event()
         done = self.state.done_set()
+        seen_in_run: set[str] = set()
 
         def progress():
             n = summary.uploaded + summary.skipped + len(summary.failed)
             self.emit(Event("progress", done=n, total=summary.total))
 
+        def fail(path, message):
+            with lock:
+                summary.failed.append((str(path), message))
+            self.emit(Event("failed", path=str(path), message=message))
+            progress()
+
         def upload_one(path: Path, sha: str, tmp: str):
             try:
-                with open(tmp, "rb") as f:
-                    data = f.read()
+                try:
+                    with open(tmp, "rb") as f:
+                        data = f.read()
+                except Exception as exc:
+                    fail(path, f"อ่านไฟล์ชั่วคราวไม่ได้: {exc}")
+                    return
+                pauses = 0
+                res = None
                 while not (stop.is_set() or abort.is_set()):
                     try:
                         res = self.client.upload(data, path.name, sha, self.s.uploader, self.s.sport, self.s.position)
                         break
                     except TransientError as exc:
+                        if pauses >= MAX_PAUSES:
+                            res = UploadResult(ok=False, error=GIVE_UP_MSG)
+                            break
+                        pauses += 1
                         self.emit(Event("paused", message=f"เชื่อมต่อไม่ได้ ({exc}) จะลองใหม่อัตโนมัติ"))
-                        stop.wait(self.pause_seconds)
+                        self._pause(stop, abort)
                     except AuthError as exc:
                         abort.set()
                         with lock:
                             summary.auth_error = True
                         self.emit(Event("auth_error", message=str(exc)))
                         return
-                else:
+                    except Exception as exc:
+                        res = UploadResult(ok=False, error=f"{type(exc).__name__}: {exc}")
+                        break
+                if res is None:
                     return
-                with lock:
-                    if res.ok:
-                        self.state.mark(sha, res.name or "")
+                if res.ok:
+                    with lock:
+                        try:
+                            self.state.mark(sha, res.name or "")
+                        except Exception:
+                            pass
                         summary.uploaded += 1
-                    else:
-                        summary.failed.append((str(path), res.error or "ไม่ทราบสาเหตุ"))
-                        self.emit(Event("failed", path=str(path), message=res.error or ""))
-                progress()
+                    progress()
+                else:
+                    fail(path, res.error or "ไม่ทราบสาเหตุ")
+            except Exception as exc:                 # never let a worker thread die silently
+                try:
+                    fail(path, f"{type(exc).__name__}: {exc}")
+                except Exception:
+                    pass
             finally:
                 try:
                     os.unlink(tmp)
@@ -131,29 +182,48 @@ class Pipeline:
                     pass
                 slots.release()
 
-        with self.pool_factory(max_workers=self.workers) as pool, \
-                ThreadPoolExecutor(max_workers=self.upload_threads) as uploads:
+        with self.pool_factory(max_workers=self.workers) as pool,                 ThreadPoolExecutor(max_workers=self.upload_threads) as uploads:
             pending_uploads = []
 
             def on_processed(path: Path, fut):
                 try:
                     sha, tmp = fut.result()
+                except BrokenProcessPool:
+                    abort.set()
+                    slots.release()
+                    fail(path, POOL_DEAD_MSG)
+                    return
                 except Exception as exc:          # unreadable / unsupported image
-                    with lock:
-                        summary.failed.append((str(path), f"เปิดรูปไม่ได้: {exc}"))
-                    self.emit(Event("failed", path=str(path), message=str(exc)))
                     slots.release()
-                    progress()
+                    fail(path, f"เปิดรูปไม่ได้: {exc}")
                     return
-                if tmp is None:
-                    with lock:
-                        summary.skipped += 1
+                try:
+                    if tmp is not None:
+                        with lock:
+                            duplicate = sha in seen_in_run
+                            seen_in_run.add(sha)
+                        if duplicate:
+                            try:
+                                os.unlink(tmp)
+                            except OSError:
+                                pass
+                            tmp = None
+                    if tmp is None:
+                        with lock:
+                            summary.skipped += 1
+                        slots.release()
+                        progress()
+                        return
+                    pending_uploads.append(uploads.submit(upload_one, path, sha, tmp))
+                except Exception as exc:
+                    try:
+                        os.unlink(tmp)
+                    except (OSError, TypeError):
+                        pass
                     slots.release()
-                    progress()
-                    return
-                pending_uploads.append(uploads.submit(upload_one, path, sha, tmp))
+                    fail(path, f"{type(exc).__name__}: {exc}")
 
-            for path in files:
+            for idx, path in enumerate(files):
                 while not slots.acquire(timeout=0.2):
                     if stop.is_set() or abort.is_set():
                         break
@@ -161,15 +231,20 @@ class Pipeline:
                     if stop.is_set() or abort.is_set():
                         slots.release()
                         break
-                    fut = pool.submit(_work, str(path), done, self.s.logo, self.s.position, self.s.opacity, self.s.colour)
+                    try:
+                        fut = pool.submit(_work, str(path), done, self.s.logo, self.s.position, self.s.opacity, self.s.colour)
+                    except BrokenProcessPool:
+                        abort.set()
+                        slots.release()
+                        for rest in files[idx:]:
+                            fail(rest, POOL_DEAD_MSG)
+                        break
                     fut.add_done_callback(lambda f, p=path: on_processed(p, f))
                     continue
                 break
             pool.shutdown(wait=True)
             for f in list(pending_uploads):
-                f.result()
-
-        summary.stopped = stop.is_set()
-        summary.seconds = time.monotonic() - started
-        self.emit(Event("finished", done=summary.uploaded, total=summary.total))
-        return summary
+                try:
+                    f.result()
+                except Exception:
+                    pass

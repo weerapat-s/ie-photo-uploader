@@ -144,3 +144,85 @@ def test_real_process_pool(tmp_path, logo_bytes):
     summary = p.run(pl.scan(folder), threading.Event())
     assert summary.uploaded == 3 and summary.failed == []
     assert sorted(c.calls) == ["0.jpg", "1.jpg", "2.jpg"]
+
+
+def _identical_folder(tmp_path, dups=3, others=2):
+    folder = tmp_path / "in"
+    folder.mkdir(exist_ok=True)
+    for i in range(dups):
+        make_jpeg(folder / f"dup{i}.jpg", colour=(5, 5, 5))
+    for i in range(others):
+        make_jpeg(folder / f"other{i}.jpg", colour=(100 + i * 50, 20, 20))
+    return folder
+
+
+def _pipe(tmp_path, client, logo_bytes, **kw):
+    state = State(tmp_path / "state.json")
+    settings = pl.RunSettings(uploader="a", sport="b", position="top-left", opacity=100, colour="black", logo=logo_bytes)
+    return pl.Pipeline(client, state, settings, workers=2, pool_factory=ThreadPoolExecutor, pause_seconds=0, **kw)
+
+
+def test_in_run_duplicates_uploaded_once(tmp_path, logo_bytes):
+    folder = _identical_folder(tmp_path)
+    c = FakeClient()
+    summary = _pipe(tmp_path, c, logo_bytes).run(pl.scan(folder), threading.Event())
+    assert len(c.calls) == 3 and summary.uploaded == 3 and summary.skipped == 2
+
+
+def test_worker_exception_is_recorded_and_run_finishes(tmp_path, logo_bytes):
+    events = []
+    c = FakeClient([RuntimeError("boom")])
+    folder = _identical_folder(tmp_path, dups=0, others=4)
+    summary = _pipe(tmp_path, c, logo_bytes, on_event=events.append).run(pl.scan(folder), threading.Event())
+    assert summary.uploaded == 3 and len(summary.failed) == 1 and "boom" in summary.failed[0][1]
+    assert events[-1].kind == "finished"
+
+
+def test_repeated_transient_errors_give_up_per_file(tmp_path, logo_bytes):
+    class Down:
+        def upload(self, *a):
+            raise TransientError("503")
+    folder = _identical_folder(tmp_path, dups=0, others=3)
+    events = []
+    summary = _pipe(tmp_path, Down(), logo_bytes, on_event=events.append).run(pl.scan(folder), threading.Event())
+    assert summary.uploaded == 0 and len(summary.failed) == 3
+    assert all(m == "เชื่อมต่อเซิร์ฟเวอร์ไม่ได้ ลองใหม่ภายหลัง" for _, m in summary.failed)
+    assert sum(e.kind == "paused" for e in events) == 3 * pl.MAX_PAUSES
+
+
+def test_pause_is_interrupted_by_stop(tmp_path, logo_bytes):
+    class Down:
+        def upload(self, *a):
+            raise TransientError("503")
+    folder = _identical_folder(tmp_path, dups=0, others=1)
+    stop = threading.Event()
+    p = _pipe(tmp_path, Down(), logo_bytes, on_event=lambda e: stop.set() if e.kind == "paused" else None)
+    p.pause_seconds = 30
+    import time
+    t0 = time.monotonic()
+    summary = p.run(pl.scan(folder), stop)
+    assert time.monotonic() - t0 < 5 and summary.stopped
+
+
+def test_broken_pool_fails_remaining_files_and_finishes(tmp_path, logo_bytes):
+    from concurrent.futures.process import BrokenProcessPool
+
+    class DeadPool:
+        def __init__(self, max_workers):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def submit(self, *a, **k):
+            raise BrokenProcessPool("dead")
+        def shutdown(self, wait=True):
+            pass
+    folder = _identical_folder(tmp_path, dups=0, others=3)
+    events = []
+    p = _pipe(tmp_path, FakeClient(), logo_bytes, on_event=events.append)
+    p.pool_factory = DeadPool
+    summary = p.run(pl.scan(folder), threading.Event())
+    assert len(summary.failed) == 3 and summary.uploaded == 0
+    assert "หน่วยความจำ" in summary.failed[0][1]
+    assert events[-1].kind == "finished"

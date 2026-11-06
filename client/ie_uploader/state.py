@@ -6,6 +6,7 @@ import json
 import os
 import re
 import threading
+import time
 from pathlib import Path
 
 
@@ -38,7 +39,14 @@ class State:
     def mark(self, sha256: str, name: str) -> None:
         with self._lock:
             self._map[sha256] = name
-            self.path.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.path.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(self._map, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, self.path)
+            for attempt in range(5):
+                try:
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp.write_text(json.dumps(self._map, ensure_ascii=False), encoding="utf-8")
+                    os.replace(tmp, self.path)
+                    return
+                except OSError:               # AV / sync tool holding the file; PermissionError is an OSError
+                    if attempt < 4:
+                        time.sleep(0.2)
+            # Still failing: keep the entry in memory. The server duplicate guard makes a lost record harmless.

@@ -59,10 +59,10 @@ class Client:
         for attempt in range(len(RETRY_DELAYS) + 1):
             try:
                 resp = self.session.request(method, url, timeout=(10, 180), **kw)
-            except (requests.ConnectionError, requests.Timeout) as exc:
+            except requests.RequestException as exc:
                 last = str(exc)
             else:
-                if resp.status_code in (401, 403):
+                if resp.status_code == 401:
                     raise AuthError(_error_text(resp))
                 if resp.status_code not in TRANSIENT_STATUS:
                     return resp
@@ -95,6 +95,12 @@ class Client:
             files={"photo": (original_name, io.BytesIO(data), "application/octet-stream")},
         )
         if resp.status_code == 200:
-            body = resp.json()
-            return UploadResult(ok=True, name=body.get("name"), duplicate=bool(body.get("duplicate")))
+            try:
+                body = resp.json()
+                name = body.get("name")
+            except (ValueError, AttributeError):
+                name = None
+            if not name or not isinstance(name, str):
+                return UploadResult(ok=False, error="ตอบกลับจากเซิร์ฟเวอร์ไม่ถูกต้อง")
+            return UploadResult(ok=True, name=name, duplicate=bool(body.get("duplicate")))
         return UploadResult(ok=False, error=_error_text(resp))
