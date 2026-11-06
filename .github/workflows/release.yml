@@ -13,7 +13,7 @@ jobs:
             artifact: client/dist/IE-PHOTO-Uploader-Setup.exe
           - os: macos-14          # Apple Silicon
             artifact: client/dist/IE-PHOTO-Uploader-arm64.dmg
-          - os: macos-13          # Intel iMacs
+          - os: macos-15-intel     # Intel iMacs
             artifact: client/dist/IE-PHOTO-Uploader-intel.dmg
     runs-on: ${{ matrix.os }}
     defaults:
