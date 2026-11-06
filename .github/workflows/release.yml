@@ -11,7 +11,7 @@ jobs:
         include:
           - os: windows-latest
             artifact: client/dist/IE-PHOTO-Uploader-Setup.exe
-          - os: macos-14          # Apple Silicon
+          - os: macos-latest      # Apple Silicon (M-series)
             artifact: client/dist/IE-PHOTO-Uploader-arm64.dmg
           - os: macos-15-intel     # Intel iMacs
             artifact: client/dist/IE-PHOTO-Uploader-intel.dmg
