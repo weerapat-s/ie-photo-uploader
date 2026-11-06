@@ -21,11 +21,88 @@ PREVIEW_SOURCE_PX = 1600      # longest side of the cached preview source
 PREVIEW_DEBOUNCE_MS = 250
 LOGO_MISMATCH = "โลโก้จากเซิร์ฟเวอร์ไม่ตรงกัน ลองเชื่อมต่อใหม่"
 
+# --- look & feel: same palette as the IE-PHOTO web gallery ---
+BG = "#fcf8f5"
+CARD = "#ffffff"
+LINE = "#eadfd9"
+SOFT = "#f4ece8"
+INK = "#2d2937"
+MUTED = "#6f6880"
+PINK = "#c93a62"
+PINK_HOVER = "#b32f55"
+PINK_PALE = "#fff0f4"
+PINK_OFF = "#e6c3cd"
+PEACH = "#ffcfa8"
+MINT = "#c9ecdc"
+MINT_INK = "#1f6b4a"
+ERR_BG = "#fde7ec"
+CONN_STYLES = {
+    "idle": (SOFT, MUTED), "busy": (SOFT, INK), "ok": (MINT, MINT_INK), "error": (ERR_BG, PINK),
+}
+
+
+def thai_font_family(root) -> str:
+    """First installed family that has good Thai glyphs; falls back to Tk's default."""
+    import sys
+    from tkinter import font as tkfont
+    wanted = {
+        "win32": ("Leelawadee UI", "Tahoma", "Segoe UI"),
+        "darwin": ("Thonburi", "Ayuthaya", "Helvetica Neue"),
+    }.get(sys.platform, ("Noto Sans Thai", "Loma", "DejaVu Sans"))
+    have = set(tkfont.families(root))
+    return next((f for f in wanted if f in have), "TkDefaultFont")
+
+
+def short_path(path, limit: int = 44) -> str:
+    text = str(path)
+    return text if len(text) <= limit else "…" + text[-(limit - 1):]
+
+
 POS_LABELS = {
     "top-left": "ซ้ายบน", "top-center": "กลางบน", "top-right": "ขวาบน",
     "middle-left": "ซ้ายกลาง", "center": "กลาง", "middle-right": "ขวากลาง",
     "bottom-left": "ซ้ายล่าง", "bottom-center": "กลางล่าง", "bottom-right": "ขวาล่าง",
 }
+
+
+class PositionPicker(ctk.CTkFrame):
+    """3x3 grid that looks like a photo: click where the watermark should go.
+
+    Keeps the get()/set(label) API of the option menu it replaces, so callers stay the same.
+    """
+
+    def __init__(self, master, labels: dict, command, font):
+        super().__init__(master, fg_color=SOFT, border_width=1, border_color=LINE, corner_radius=12)
+        self._command = command
+        self._cells = {}
+        self._value = next(iter(labels.values()))
+        for i, label in enumerate(labels.values()):
+            cell = ctk.CTkButton(self, text="", width=48, height=28, corner_radius=8, font=font,
+                                 fg_color=CARD, hover_color=PEACH, border_width=1, border_color=LINE,
+                                 command=lambda lab=label: self._pick(lab))
+            cell.grid(row=i // 3, column=i % 3, padx=3, pady=3)
+            self._cells[label] = cell
+        self._paint()
+
+    def _paint(self):
+        for label, cell in self._cells.items():
+            on = label == self._value
+            cell.configure(fg_color=PINK if on else CARD, hover_color=PINK_HOVER if on else PEACH,
+                           text="●" if on else "", text_color="#ffffff")
+
+    def _pick(self, label):
+        self._value = label
+        self._paint()
+        if self._command:
+            self._command(label)
+
+    def get(self) -> str:
+        return self._value
+
+    def set(self, label: str) -> None:
+        if label in self._cells:
+            self._value = label
+            self._paint()
 
 
 class App(ctk.CTk, TkinterDnD.DnDWrapper):
@@ -34,7 +111,9 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self.TkdndVersion = TkinterDnD._require(self)
         ctk.set_appearance_mode("light")
         self.title(f"IE-PHOTO Uploader {__version__}")
-        self.geometry("760x640")
+        self.geometry("920x740")
+        self.minsize(840, 700)
+        self.configure(fg_color=BG)
         self.settings = Settings()
         self.events: queue.Queue = queue.Queue()
         self.stop = threading.Event()
@@ -52,65 +131,174 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self.after(100, self._drain)
 
     # ---------- layout ----------
+    def _card(self, parent, step: int, title: str) -> ctk.CTkFrame:
+        card = ctk.CTkFrame(parent, fg_color=CARD, border_width=1, border_color=LINE, corner_radius=16)
+        head = ctk.CTkFrame(card, fg_color="transparent")
+        head.pack(fill="x", padx=16, pady=(12, 2))
+        ctk.CTkLabel(head, text=str(step), width=26, height=26, corner_radius=13, fg_color=PINK,
+                     text_color="#ffffff", font=self.f_small_bold).pack(side="left")
+        ctk.CTkLabel(head, text=title, text_color=INK, font=self.f_h2).pack(side="left", padx=10)
+        return card
+
+    def _field(self, parent, text: str):
+        ctk.CTkLabel(parent, text=text, text_color=MUTED, font=self.f_small, anchor="w").pack(
+            fill="x", padx=16, pady=(6, 2))
+
+    def _entry(self, parent, var, secret: bool = False) -> ctk.CTkEntry:
+        entry = ctk.CTkEntry(parent, textvariable=var, height=34, corner_radius=10,
+                             fg_color=SOFT, border_color=LINE, text_color=INK,
+                             font=self.f_body, show="•" if secret else "")
+        entry.pack(fill="x", padx=16)
+        return entry
+
     def _build(self):
-        pad = {"padx": 16, "pady": 6}
-        top = ctk.CTkFrame(self)
-        top.pack(fill="x", **pad)
-        ctk.CTkLabel(top, text="รหัสงาน").grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        family = thai_font_family(self)
+
+        def mk(size, weight="normal"):
+            return ctk.CTkFont(family=family, size=size, weight=weight)
+
+        self.f_title, self.f_h2 = mk(22, "bold"), mk(15, "bold")
+        self.f_body, self.f_small, self.f_small_bold = mk(14), mk(12), mk(12, "bold")
+        self.f_big = mk(16, "bold")
+
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(1, weight=1)
+
+        # header
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", padx=24, pady=(14, 6))
+        ctk.CTkLabel(header, text="◆", text_color=PINK, font=mk(26, "bold")).pack(side="left")
+        titles = ctk.CTkFrame(header, fg_color="transparent")
+        titles.pack(side="left", padx=10)
+        ctk.CTkLabel(titles, text="IE-PHOTO Uploader", text_color=INK, font=self.f_title, anchor="w").pack(anchor="w")
+        ctk.CTkLabel(titles, text="ใส่ลายน้ำบนเครื่องของคุณ แล้วส่งขึ้นคลังภาพ", text_color=MUTED,
+                     font=self.f_small, anchor="w").pack(anchor="w")
+        ctk.CTkLabel(header, text=f"v{__version__}", text_color=MUTED, font=self.f_small).pack(side="right")
+
+        # left column: 1 connect, 2 watermark
+        left = ctk.CTkFrame(self, fg_color="transparent", width=340)
+        left.grid(row=1, column=0, sticky="nsw", padx=(24, 10), pady=(0, 20))
+        left.grid_propagate(False)
+
+        c1 = self._card(left, 1, "เชื่อมต่องาน")
+        c1.pack(fill="x", pady=(0, 10))
+        self._field(c1, "รหัสงาน (ขอจากแอดมิน เช่น XXXXX-XXXXX-XXXXX-XXXXX)")
         self.code_var = ctk.StringVar(value=self.settings.code)
-        ctk.CTkEntry(top, textvariable=self.code_var, width=260, show="•").grid(row=0, column=1, padx=8)
-        ctk.CTkLabel(top, text="ชื่อช่างภาพ").grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        self._entry(c1, self.code_var, secret=True)
+        self._field(c1, "ชื่อช่างภาพ (ชื่อโฟลเดอร์ที่รูปจะไปอยู่ เช่น สมชาย ใจดี)")
         self.name_var = ctk.StringVar(value=self.settings.uploader)
-        ctk.CTkEntry(top, textvariable=self.name_var, width=260).grid(row=1, column=1, padx=8)
-        self.connect_btn = ctk.CTkButton(top, text="เชื่อมต่อ", command=self._connect)
-        self.connect_btn.grid(row=0, column=2, rowspan=2, padx=8)
-        self.event_label = ctk.CTkLabel(top, text="ยังไม่ได้เชื่อมต่อ", text_color="#6f6880")
-        self.event_label.grid(row=2, column=0, columnspan=3, sticky="w", padx=8)
+        self._entry(c1, self.name_var)
+        self.connect_btn = ctk.CTkButton(c1, text="เชื่อมต่อ", height=36, corner_radius=10, font=self.f_body,
+                                         fg_color=CARD, hover_color=PINK_PALE, text_color=PINK,
+                                         border_width=2, border_color=PINK, command=self._connect)
+        self.connect_btn.pack(fill="x", padx=16, pady=(10, 6))
+        self.event_label = ctk.CTkLabel(c1, text="", font=self.f_small, corner_radius=10,
+                                        wraplength=270, justify="left", anchor="w")
+        self.event_label.pack(fill="x", padx=16, pady=(0, 12))
+        self._set_connection("ยังไม่ได้เชื่อมต่อ", "idle")
 
-        opts = ctk.CTkFrame(self)
-        opts.pack(fill="x", **pad)
-        ctk.CTkLabel(opts, text="กีฬา").grid(row=0, column=0, padx=8, pady=4, sticky="w")
-        self.sport_menu = ctk.CTkOptionMenu(opts, values=["—"], command=lambda _: self._refresh_preview())
-        self.sport_menu.grid(row=0, column=1, padx=8, sticky="w")
-        self.colour_label = ctk.CTkLabel(opts, text="")
-        self.colour_label.grid(row=0, column=2, padx=8)
-        ctk.CTkLabel(opts, text="ตำแหน่งลายน้ำ").grid(row=1, column=0, padx=8, pady=4, sticky="w")
-        self.pos_menu = ctk.CTkOptionMenu(opts, values=list(POS_LABELS.values()), command=lambda _: self._refresh_preview())
+        c2 = self._card(left, 2, "ตั้งค่าลายน้ำ")
+        c2.pack(fill="x")
+        self._field(c2, "กีฬา")
+        self.sport_menu = ctk.CTkOptionMenu(c2, values=["—"], command=lambda _: self._refresh_preview(),
+                                            height=34, corner_radius=10, font=self.f_body, dropdown_font=self.f_body,
+                                            fg_color=SOFT, button_color=PEACH, button_hover_color=PINK_OFF,
+                                            text_color=INK, dropdown_fg_color=CARD, dropdown_text_color=INK,
+                                            dropdown_hover_color=PINK_PALE, anchor="w")
+        self.sport_menu.pack(fill="x", padx=16)
+        self.colour_label = ctk.CTkLabel(c2, text="", font=self.f_small, text_color=MUTED, anchor="w")
+        self.colour_label.pack(fill="x", padx=16, pady=(2, 0))
+        self._field(c2, "ตำแหน่งลายน้ำ")
+        self.pos_menu = PositionPicker(c2, POS_LABELS, lambda _: self._refresh_preview(), self.f_body)
         self.pos_menu.set(POS_LABELS.get(self.settings.position, "ซ้ายบน"))
-        self.pos_menu.grid(row=1, column=1, padx=8, sticky="w")
-        ctk.CTkLabel(opts, text="ความเข้ม").grid(row=2, column=0, padx=8, sticky="w")
-        self.opacity = ctk.CTkSlider(opts, from_=10, to=100, number_of_steps=18, command=lambda _: self._refresh_preview())
+        self.pos_menu.pack(padx=16, anchor="w")
+        row = ctk.CTkFrame(c2, fg_color="transparent")
+        row.pack(fill="x", padx=16, pady=(8, 0))
+        ctk.CTkLabel(row, text="ความเข้ม", text_color=MUTED, font=self.f_small).pack(side="left")
+        self.opacity_label = ctk.CTkLabel(row, text=f"{self.settings.opacity}%", text_color=INK,
+                                          font=self.f_small_bold)
+        self.opacity_label.pack(side="right")
+        self.opacity = ctk.CTkSlider(c2, from_=10, to=100, number_of_steps=18, height=16,
+                                     progress_color=PINK, button_color=PINK, button_hover_color=PINK_HOVER,
+                                     fg_color=SOFT, command=self._on_opacity)
         self.opacity.set(self.settings.opacity)
-        self.opacity.grid(row=2, column=1, padx=8, sticky="we")
+        self.opacity.pack(fill="x", padx=16, pady=(0, 12))
 
-        self.drop = ctk.CTkLabel(self, text="ลากโฟลเดอร์รูปมาวางที่นี่ หรือกดเพื่อเลือก", height=70,
-                                 fg_color="#f4ece8", corner_radius=12)
-        self.drop.pack(fill="x", **pad)
-        self.drop.bind("<Button-1>", lambda e: self._choose_folder())
-        # CTkLabel is a frame wrapping an inner tk.Label/canvas that covers it, so register
-        # both the wrapper and its inner widgets or drops on the text would be ignored.
-        for w in (self.drop, getattr(self.drop, "_label", None), getattr(self.drop, "_canvas", None)):
-            if w is not None:
-                w.drop_target_register(DND_FILES)
-                w.dnd_bind("<<Drop>>", self._on_drop)
+        # right column: 3 photos + send
+        right = self._card(self, 3, "รูปของคุณ")
+        right.grid(row=1, column=1, sticky="nsew", padx=(10, 24), pady=(0, 20))
 
-        self.preview = ctk.CTkLabel(self, text="", height=180)
-        self.preview.pack(**pad)
+        self.drop_zone = ctk.CTkFrame(right, fg_color=PINK_PALE, border_width=2, border_color=PEACH,
+                                      corner_radius=14, height=84, cursor="hand2")
+        self.drop_zone.pack(fill="x", padx=16, pady=(4, 10))
+        self.drop_zone.pack_propagate(False)
+        self.drop = ctk.CTkLabel(self.drop_zone, text="ลากโฟลเดอร์รูปมาวางที่นี่", text_color=INK, font=self.f_big)
+        self.drop.pack(pady=(16, 0))
+        self.drop_sub = ctk.CTkLabel(self.drop_zone, text="หรือคลิกเพื่อเลือกโฟลเดอร์", text_color=MUTED,
+                                     font=self.f_small)
+        self.drop_sub.pack()
+        for w in (self.drop_zone, self.drop, self.drop_sub):
+            w.bind("<Button-1>", lambda e: self._choose_folder())
+        # CTk widgets wrap inner tk widgets that cover them, so register the wrappers and the
+        # inner widgets or drops landing on the text would be ignored.
+        for w in (self.drop_zone, self.drop, self.drop_sub):
+            for target in (w, getattr(w, "_canvas", None), getattr(w, "_label", None)):
+                if target is not None:
+                    target.drop_target_register(DND_FILES)
+                    target.dnd_bind("<<Drop>>", self._on_drop)
 
-        bar = ctk.CTkFrame(self, fg_color="transparent")
-        bar.pack(fill="x", **pad)
-        self.start_btn = ctk.CTkButton(bar, text="เริ่มใส่ลายน้ำ + อัปโหลด", fg_color="#c93a62",
-                                       hover_color="#b32f55", command=self._start, state="disabled")
-        self.start_btn.pack(side="left")
-        self.stop_btn = ctk.CTkButton(bar, text="หยุด", command=self.stop.set, state="disabled", fg_color="#6f6880")
-        self.stop_btn.pack(side="left", padx=8)
-        self.progress = ctk.CTkProgressBar(self)
+        stage = self.stage = ctk.CTkFrame(right, fg_color=SOFT, corner_radius=14, border_width=1, border_color=LINE)
+        self._stage_size = (0, 0)
+        self.preview = ctk.CTkLabel(stage, text="ตัวอย่างลายน้ำจะแสดงที่นี่\nหลังเชื่อมต่อและเลือกโฟลเดอร์",
+                                    text_color=MUTED, font=self.f_body, justify="center")
+        self.preview.pack(fill="both", expand=True, padx=8, pady=8)
+
+        bar = ctk.CTkFrame(right, fg_color="transparent")
+        self.start_btn = ctk.CTkButton(bar, text="เริ่มใส่ลายน้ำ + อัปโหลด", height=46, corner_radius=12,
+                                       font=self.f_big, fg_color=PINK, hover_color=PINK_HOVER,
+                                       text_color="#ffffff", text_color_disabled="#ffffff",
+                                       command=self._start, state="disabled")
+        self.start_btn.pack(side="left", fill="x", expand=True)
+        self.stop_btn = ctk.CTkButton(bar, text="หยุด", width=90, height=46, corner_radius=12, font=self.f_body,
+                                      fg_color=CARD, hover_color=SOFT, text_color=MUTED, border_width=1,
+                                      border_color=LINE, text_color_disabled=PINK_OFF, command=self.stop.set,
+                                      state="disabled")
+        self.stop_btn.pack(side="left", padx=(10, 0))
+        self._set_start_look(False)
+
+        prog = ctk.CTkFrame(right, fg_color="transparent")
+        self.progress = ctk.CTkProgressBar(prog, height=10, corner_radius=5, progress_color=PINK, fg_color=SOFT)
         self.progress.set(0)
-        self.progress.pack(fill="x", **pad)
-        self.status = ctk.CTkLabel(self, text="", anchor="w")
-        self.status.pack(fill="x", **pad)
-        self.failed_box = ctk.CTkTextbox(self, height=90)
-        self.failed_box.pack(fill="both", expand=True, **pad)
+        self.progress.pack(fill="x")
+        info = ctk.CTkFrame(prog, fg_color="transparent")
+        info.pack(fill="x", pady=(4, 6))
+        self.status = ctk.CTkLabel(info, text="พร้อมเมื่อเชื่อมต่อและเลือกโฟลเดอร์แล้ว", text_color=MUTED,
+                                   font=self.f_small, anchor="w")
+        self.status.pack(side="left")
+        self.percent_label = ctk.CTkLabel(info, text="0%", text_color=INK, font=self.f_small_bold)
+        self.percent_label.pack(side="right")
+
+        failed_label = ctk.CTkLabel(right, text="ส่งไม่สำเร็จ", text_color=MUTED, font=self.f_small, anchor="w")
+        self.failed_box = ctk.CTkTextbox(right, height=64, corner_radius=10, fg_color=CARD, border_width=1,
+                                         border_color=LINE, text_color=PINK, font=self.f_small)
+        self.failed_box.pack(side="bottom", fill="x", padx=16, pady=(2, 16))
+        failed_label.pack(side="bottom", fill="x", padx=16)
+        prog.pack(side="bottom", fill="x", padx=16)
+        bar.pack(side="bottom", fill="x", padx=16, pady=(0, 10))
+        stage.pack(fill="both", expand=True, padx=16, pady=(0, 10))
+        stage.bind("<Configure>", self._on_stage_resize)
+
+    def _set_connection(self, text: str, kind: str) -> None:
+        bg, fg = CONN_STYLES[kind]
+        self.event_label.configure(text=f"  {text}  ", fg_color=bg, text_color=fg)
+
+    def _set_start_look(self, enabled: bool) -> None:
+        self.start_btn.configure(state="normal" if enabled else "disabled",
+                                 fg_color=PINK if enabled else PINK_OFF)
+
+    def _on_opacity(self, value) -> None:
+        self.opacity_label.configure(text=f"{int(float(value))}%")
+        self._refresh_preview()
 
     # ---------- actions ----------
     def _position(self) -> str:
@@ -137,7 +325,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         if not code or not self.name_var.get().strip():
             messagebox.showwarning("IE-PHOTO", "ใส่รหัสงานและชื่อช่างภาพก่อน")
             return
-        self.event_label.configure(text="กำลังเชื่อมต่อ…")
+        self._set_connection("กำลังเชื่อมต่อ…", "busy")
 
         def work():
             try:
@@ -174,7 +362,9 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self.folder = folder
         self.files = scan(folder)
         self._preview_src = self._load_preview_source(self.files[0]) if self.files else None
-        self.drop.configure(text=f"{folder}  ·  {len(self.files)} รูป")
+        count = f"{len(self.files):,} รูป" if self.files else "ไม่พบรูป (รองรับ JPG, PNG, WebP)"
+        self.drop.configure(text=f"📁 {folder.name or short_path(folder)}  ·  {count}")
+        self.drop_sub.configure(text=f"{short_path(folder.parent if folder.name else folder)}   ·   คลิกเพื่อเปลี่ยน")
         self._refresh_preview()
         self._update_start()
 
@@ -194,10 +384,18 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             return None
 
     def _refresh_preview(self):
-        self.colour_label.configure(text=f"สีลายน้ำ: {'ขาว' if self._colour() == 'white' else 'ดำ'}")
+        self.colour_label.configure(text=f"สีลายน้ำตามสนาม:  {'○ ขาว' if self._colour() == 'white' else '● ดำ'}")
         if self._preview_job is not None:
             self.after_cancel(self._preview_job)
         self._preview_job = self.after(PREVIEW_DEBOUNCE_MS, self._render_preview)
+
+    def _on_stage_resize(self, event) -> None:
+        """Re-fit the preview when the window is resized (ignore tiny changes: no feedback loops)."""
+        w, h = event.width, event.height
+        if abs(w - self._stage_size[0]) > 6 or abs(h - self._stage_size[1]) > 6:
+            self._stage_size = (w, h)
+            if self._preview_src is not None:
+                self._refresh_preview()
 
     def _render_preview(self):
         self._preview_job = None
@@ -206,7 +404,9 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         try:
             img = watermark.apply_image(self._preview_src, self.logo, self._position(),
                                         int(self.opacity.get()), self._colour(), keep_alpha=False)
-            img.thumbnail((320, 180))
+            box_w = max(200, self.stage.winfo_width() - 24)
+            box_h = max(120, self.stage.winfo_height() - 24)
+            img.thumbnail((box_w, box_h))
         except Exception:
             return
         self._preview_img = ctk.CTkImage(img, size=img.size)
@@ -214,7 +414,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _update_start(self):
         ready = self.client is not None and self.folder is not None and not self.running
-        self.start_btn.configure(state="normal" if ready else "disabled")
+        self._set_start_look(ready)
 
     def _start(self):
         self.settings.save(self.code_var.get(), self.name_var.get(), self._position(), int(self.opacity.get()))
@@ -226,9 +426,12 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self.stop.clear()
         self.running = True
         self.failed_box.delete("1.0", "end")
-        self.start_btn.configure(state="disabled")
+        self._set_start_look(False)
+        self.start_btn.configure(text="กำลังส่งรูป…")
         self.connect_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
+        self.progress.set(0)
+        self.percent_label.configure(text="0%")
         pipe = Pipeline(self.client, state, run, on_event=self.events.put)
 
         def work():
@@ -256,32 +459,39 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                 names = [s["name"] for s in self.config_data["sports"]] or ["—"]
                 self.sport_menu.configure(values=names)
                 self.sport_menu.set(names[0])
-                self.event_label.configure(text=f"งาน: {self.config_data['label']}  ·  เชื่อมต่อผ่าน {self.client.base.split('/apps')[0]}")
+                via = "ช่องทางด่วน" if self.client.base.startswith("http://100.") else "อินเทอร์เน็ต"
+                self._set_connection(f"เชื่อมต่อแล้ว · งาน: {self.config_data['label']} · ผ่าน{via}", "ok")
                 self._refresh_preview()
                 self._update_start()
             elif kind == "error":
-                self.event_label.configure(text=ev[1])
+                self._set_connection(ev[1], "error")
             elif kind == "logo_mismatch":
                 self.client = self.logo = None
-                self.event_label.configure(text=LOGO_MISMATCH)
+                self._set_connection(LOGO_MISMATCH, "error")
                 self._update_start()
             elif kind == "done":
                 s = ev[1]
                 self.running = False
                 self.stop_btn.configure(state="disabled")
                 self.connect_btn.configure(state="normal")
+                self.start_btn.configure(text="เริ่มใส่ลายน้ำ + อัปโหลด")
                 self._update_start()
                 if s.error:
                     self.status.configure(text=f"เกิดข้อผิดพลาด: {s.error}")
                     return
                 rate = s.uploaded / s.seconds if s.seconds else 0
+                if not s.failed and not s.stopped:
+                    self.progress.set(1)
+                    self.percent_label.configure(text="100%")
                 self.status.configure(text=f"เสร็จ: ส่ง {s.uploaded} · ข้าม (เคยส่งแล้ว) {s.skipped} · ไม่สำเร็จ {len(s.failed)} · {rate:.1f} รูป/วินาที")
                 if s.auth_error:
                     messagebox.showerror("IE-PHOTO", "รหัสงานไม่ถูกต้องหรือหมดอายุ ขอรหัสใหม่จากแอดมิน")
             return
         if ev.kind == "progress":
-            self.progress.set(ev.done / max(1, ev.total))
-            self.status.configure(text=f"{ev.done}/{ev.total}")
+            frac = ev.done / max(1, ev.total)
+            self.progress.set(frac)
+            self.percent_label.configure(text=f"{int(frac * 100)}%")
+            self.status.configure(text=f"ส่งแล้ว {ev.done:,} / {ev.total:,} รูป")
         elif ev.kind == "failed":
             self.failed_box.insert("end", f"{Path(ev.path).name}: {ev.message}\n")
         elif ev.kind == "paused":
