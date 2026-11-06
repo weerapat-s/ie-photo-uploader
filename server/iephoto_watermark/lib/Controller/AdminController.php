@@ -25,6 +25,7 @@ final class AdminController extends Controller {
         private IUserSession $userSession,
         private IGroupManager $groupManager,
         private IURLGenerator $urlGenerator,
+        private \OCA\IEPhotoWatermark\Service\DesktopCodeStore $desktopCodes,
     ) {
         parent::__construct($appName, $request);
     }
@@ -50,6 +51,7 @@ final class AdminController extends Controller {
             'pendingUrl' => $this->urlGenerator->linkToRoute(Application::APP_ID . '.admin.pending'),
             'scopesUrl' => $this->urlGenerator->linkToRoute(Application::APP_ID . '.admin.saveScopes'),
             'webhookUrl' => $this->urlGenerator->linkToRoute(Application::APP_ID . '.admin.saveWebhook'),
+            'desktopCodesUrl' => $this->urlGenerator->linkToRoute(Application::APP_ID . '.admin.desktopCodes'),
             'requestPageUrl' => $this->urlGenerator->linkToRoute(Application::APP_ID . '.request.index'),
             'destinationLocked' => $this->service->destinationLocked(),
             'albumViewBase' => $this->urlGenerator->linkToRouteAbsolute(
@@ -212,5 +214,30 @@ final class AdminController extends Controller {
         } catch (\Throwable $e) {
             return new JSONResponse(['error' => $e->getMessage()], 400);
         }
+    }
+
+    public function desktopCodes(): JSONResponse {
+        if (!$this->isAdmin()) {
+            return new JSONResponse(['error' => 'ต้องเป็นผู้ดูแลระบบ'], 403);
+        }
+        return new JSONResponse(['codes' => array_reverse($this->desktopCodes->list()), 'albums' => $this->service->desktopSports()]);
+    }
+
+    public function createDesktopCode(string $label = '', string $album = '', int $days = 7): JSONResponse {
+        if (!$this->isAdmin()) {
+            return new JSONResponse(['error' => 'ต้องเป็นผู้ดูแลระบบ'], 403);
+        }
+        try {
+            return new JSONResponse($this->desktopCodes->create($label, $album, $days));
+        } catch (\Throwable $e) {
+            return new JSONResponse(['error' => $e->getMessage()], 400);
+        }
+    }
+
+    public function revokeDesktopCode(string $id = ''): JSONResponse {
+        if (!$this->isAdmin()) {
+            return new JSONResponse(['error' => 'ต้องเป็นผู้ดูแลระบบ'], 403);
+        }
+        return new JSONResponse(['revoked' => $this->desktopCodes->revoke($id)]);
     }
 }

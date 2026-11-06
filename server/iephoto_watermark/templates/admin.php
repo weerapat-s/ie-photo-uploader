@@ -3,11 +3,13 @@ declare(strict_types=1);
 
 /** @var array $_ */
 script('iephoto_watermark', 'admin');
+script('iephoto_watermark', 'admin-desktop');
 style('iephoto_watermark', 'upload');
 style('iephoto_watermark', 'admin-dashboard');
 $e = static fn ($value): string => htmlspecialchars((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 ?>
 <div id="iephoto-admin"
+     data-desktop-codes-url="<?= $e($_['desktopCodesUrl'] ?? '') ?>"
      data-config-url="<?= $e($_['configUrl'] ?? '') ?>"
      data-album-api="<?= $e($_['albumApiUrl'] ?? '') ?>"
      data-album-view-base="<?= $e($_['albumViewBase'] ?? '') ?>"
@@ -64,6 +66,19 @@ $e = static fn ($value): string => htmlspecialchars((string)$value, ENT_QUOTES |
 
       <h3 class="iep-albums-listtitle">อัลบั้มที่มีอยู่</h3>
       <div class="iep-albums-list" data-album-list><p class="iep-help">กำลังโหลด…</p></div>
+    </section>
+
+    <section class="iep-card" data-desktop-section>
+      <h2>รหัสสำหรับโปรแกรม IE-PHOTO Uploader</h2>
+      <p class="iep-help">ช่างภาพใส่รหัสนี้ในโปรแกรมบนเครื่องตัวเอง โปรแกรมใส่ลายน้ำเองแล้วส่งขึ้นมา เซิร์ฟเวอร์แค่ตั้งชื่อ · รหัสแสดงครั้งเดียว คัดลอกเก็บไว้</p>
+      <div class="iep-row">
+        <label class="iep-albums-field"><span>ชื่องาน</span><input type="text" data-dc-label maxlength="80" placeholder="เช่น ChalkGames 2569"></label>
+        <label class="iep-albums-field"><span>ล็อกอัลบั้ม (ไม่บังคับ)</span><select data-dc-album><option value="">ให้ช่างภาพเลือกกีฬาเอง</option></select></label>
+        <label class="iep-albums-field"><span>ใช้ได้กี่วัน</span><input type="number" data-dc-days min="1" max="90" value="7"></label>
+        <button type="button" class="iep-primary" data-dc-create>สร้างรหัส</button>
+      </div>
+      <div class="iep-status" data-dc-status role="status" aria-live="polite"></div>
+      <div class="iep-albums-list" data-dc-list><p class="iep-help">กำลังโหลด…</p></div>
     </section>
 
     <section class="iep-card iep-requests">
