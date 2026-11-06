@@ -1,0 +1,21 @@
+[project]
+name = "ie-uploader"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+  "Pillow>=10.4",
+  "requests>=2.32",
+  "customtkinter>=5.2",
+  "tkinterdnd2>=0.4",
+  "keyring>=25",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "responses>=0.25", "pyinstaller>=6.10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
+[tool.setuptools]
+packages = ["ie_uploader"]

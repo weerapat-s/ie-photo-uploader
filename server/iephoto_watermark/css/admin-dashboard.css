@@ -1,0 +1,50 @@
+#iephoto-admin .iep-shell { width:min(1500px,calc(100% - 38px)); max-width:none; }
+.iepad-dashboard { margin-top:18px; padding:26px; border:1px solid var(--color-border); border-radius:20px; background:var(--color-main-background); }
+.iepad-dashboard > header { display:flex; align-items:end; justify-content:space-between; gap:20px; }.iepad-dashboard > header span { color:#f43f62; font-size:10px; font-weight:850; letter-spacing:.18em; }.iepad-dashboard > header h2 { margin:5px 0 0; font-size:clamp(24px,3vw,36px); }.iepad-dashboard > header button { min-height:39px; padding:0 14px; border:1px solid var(--color-border); border-radius:99px; background:var(--color-background-hover); }
+.iepad-stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:22px; }.iepad-stats article { min-width:0; padding:18px; border:1px solid var(--color-border); border-radius:16px; background:var(--color-background-hover); }.iepad-stats span { display:block; color:var(--color-text-maxcontrast); font-size:11px; }.iepad-stats strong { display:block; margin-top:8px; overflow:hidden; font-size:clamp(22px,3vw,36px); text-overflow:ellipsis; white-space:nowrap; }
+.iepad-columns { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.35fr); gap:14px; margin-top:14px; }.iepad-columns > section { min-width:0; padding:18px; border:1px solid var(--color-border); border-radius:16px; }.iepad-columns h3 { margin:0 0 13px; }.iepad-list,.iepad-history { display:grid; gap:8px; max-height:430px; overflow:auto; }.iepad-list article,.iepad-history article { display:grid; align-items:center; gap:10px; padding:11px 12px; border-radius:11px; background:var(--color-background-hover); }.iepad-list article { grid-template-columns:minmax(0,1fr) auto; }.iepad-list strong,.iepad-history strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }.iepad-list small,.iepad-history small { color:var(--color-text-maxcontrast); }.iepad-history article { grid-template-columns:minmax(0,1fr) auto; }.iepad-history article > div { display:flex; min-width:0; flex-direction:column; }.iepad-status { min-height:22px; margin-top:10px; color:var(--color-text-maxcontrast); }
+@media(max-width:900px){.iepad-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.iepad-columns{grid-template-columns:1fr}}
+@media(max-width:560px){.iepad-dashboard{padding:16px}.iepad-stats{grid-template-columns:1fr}.iepad-dashboard>header{align-items:start;flex-direction:column}}
+
+/* ---- ขอสร้างโฟลเดอร์รูป ---- */
+.iep-albums-root { margin: 0 0 14px; color: #77716a; font-size: 12px; }
+.iep-albums-root code { padding: 2px 7px; border-radius: 6px; background: #f1eee9; color: #333; }
+.iep-albums-field { display: flex; flex: 1 1 280px; flex-direction: column; gap: 6px;
+    color: #77716a; font-size: 10px; font-weight: 800; letter-spacing: .07em; }
+.iep-albums-field input { min-height: 44px; box-sizing: border-box; padding: 0 13px;
+    border: 1px solid #d8d4cd; border-radius: 11px; background: #fff; color: #171717; font-size: 14px; }
+
+.iep-links { display: grid; gap: 14px; margin-top: 18px; padding: 16px;
+    border: 1px solid #e6e2dc; border-radius: 14px; background: #faf9f7; }
+.iep-links[hidden] { display: none !important; }
+.iep-link > span { display: block; margin-bottom: 6px; color: #55504a; font-size: 12px; font-weight: 700; }
+.iep-link em { color: #8b857d; font-style: normal; font-weight: 500; }
+.iep-link > div { display: flex; gap: 8px; }
+.iep-link input { flex: 1 1 auto; min-width: 0; min-height: 40px; padding: 0 12px;
+    border: 1px solid #ddd8d1; border-radius: 10px; background: #fff; color: #333; font-size: 13px; }
+
+.iep-albums-listtitle { margin: 26px 0 10px; font-size: 13px; font-weight: 800; color: #55504a; }
+.iep-albums-list { display: grid; gap: 8px; }
+.iep-album-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 11px 14px; border: 1px solid #eae6e0; border-radius: 11px; background: #fff; }
+.iep-album-row strong { flex: 1 1 160px; font-size: 14px; }
+.iep-album-row small { color: #8b857d; font-size: 12px; }
+
+@media (max-width: 640px) {
+    .iep-link > div { flex-direction: column; }
+}
+
+/* Orbital control-room skin (v1.39.0). */
+#iephoto-admin .iep-shell { width:min(1500px,100%); }
+.iepad-dashboard { border-color:rgba(105,232,255,.17);background:rgba(6,14,35,.86);box-shadow:0 22px 70px rgba(0,0,0,.28); }
+.iepad-dashboard > header span { color:#69e8ff;font-family:ui-monospace,SFMono-Regular,Consolas,monospace; }
+.iepad-dashboard > header h2,.iepad-columns h3 { color:#f2f8ff !important; }
+.iepad-dashboard > header button { border-color:rgba(105,232,255,.22);background:rgba(12,38,74,.7);color:#d9f4ff; }
+.iepad-stats article,.iepad-columns > section,.iepad-list article,.iepad-history article { border-color:rgba(105,232,255,.13);background:rgba(10,28,60,.56); }
+.iepad-stats strong { color:#8cecff;text-shadow:0 0 18px rgba(105,232,255,.2); }
+.iep-albums-root,.iep-albums-field,.iep-link > span,.iep-albums-listtitle { color:#80a0bc; }
+.iep-albums-root code { border:1px solid rgba(105,232,255,.16);background:rgba(12,35,68,.72);color:#bdeeff; }
+.iep-albums-field input,.iep-link input { border-color:rgba(105,232,255,.2);background:#07132e;color:#e7f7ff; }
+.iep-links { border-color:rgba(105,232,255,.15);background:rgba(8,24,53,.62); }
+.iep-link em,.iep-album-row small { color:#6384a2; }
+.iep-album-row { border-color:rgba(105,232,255,.13);background:rgba(10,28,60,.56); }

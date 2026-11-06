@@ -48,7 +48,7 @@ Python 3.11, CustomTkinter, Pillow, requests. แพ็กด้วย PyInstall
 | ระยะขอบ | `round(min(กว้าง, สูง) × 0.02)` |
 | ตำแหน่ง | 9 ค่า: `top-left`, `top-center`, `top-right`, `middle-left`, `center`, `middle-right`, `bottom-left`, `bottom-center`, `bottom-right` แนวกลางใช้ `round((รูป − โลโก้)/2)` และไม่ให้ติดลบ |
 | ไฟล์ที่ได้ | JPEG quality 96, `subsampling=0` (4:4:4), ใส่ ICC profile เดิมกลับ, ไม่ใส่ EXIF อื่น (ลบ GPS/serial) |
-| นามสกุลที่รับ | `.jpg`, `.jpeg`, `.png`, `.webp`, `.heic` (HEIC ผ่าน `pillow-heif`) ส่วน PNG/WEBP ส่งเป็นนามสกุลเดิม |
+| นามสกุลที่รับ | `.jpg`, `.jpeg`, `.png`, `.webp` (ตรงกับที่เซิร์ฟเวอร์รับ) ส่งออกนามสกุลเดิม |
 
 ### 3.2 `uploader.py`
 
@@ -78,9 +78,9 @@ Python 3.11, CustomTkinter, Pillow, requests. แพ็กด้วย PyInstall
 
 ### 4.1 รหัสงาน (desktop code)
 
-- แอดมินสร้างในหน้า `/admin` ส่วนใหม่ "รหัสสำหรับโปรแกรม" ระบุชื่องาน, วันหมดอายุ (ค่าเริ่มต้น 7 วัน), โฟลเดอร์ปลายทาง (ต้องอยู่ใน scan scope เดิม)
+- แอดมินสร้างในหน้า `/admin` ส่วนใหม่ "รหัสสำหรับโปรแกรม" ระบุชื่องาน, วันหมดอายุ (ค่าเริ่มต้น 7 วัน), อัลบั้ม (ไม่บังคับ): ชื่ออัลบั้ม/กีฬาที่ลงทะเบียนแล้ว ถ้าว่าง ช่างภาพเลือกกีฬาเองจากรายการ
 - รหัสสุ่ม 20 ตัวอักษร base32 แสดงให้แอดมินเห็นครั้งเดียว
-- เก็บใน app config `desktop_codes` เป็น JSON: `[{id, label, hash: sha256(code), folder, expiresAt, createdAt, revoked}]`
+- เก็บใน app config `desktop_codes` เป็น JSON: `[{id, label, hash: sha256(code), album, expiresAt, createdAt, revoked}]`
 - แอดมินยกเลิกรหัสได้
 
 ### 4.2 `GET /desktop/config` (PublicPage, header `X-IEPhoto-Code`)
@@ -90,6 +90,7 @@ Python 3.11, CustomTkinter, Pillow, requests. แพ็กด้วย PyInstall
 { "label": "ChalkGames 2569", "expiresAt": 1794000000,
   "positions": ["top-left", "..."], "defaultPosition": "top-left",
   "sports": [{"name": "ฟุตบอล", "colour": "black"}, {"name": "บาส", "colour": "white"}],
+  "album": "",
   "logoUrl": "/custom_apps/iephoto_watermark/img/watermark.png", "logoSha256": "…",
   "widthRatio": 0.07, "marginRatio": 0.02, "jpegQuality": 96, "maxUploadMb": 95 }
 ```
@@ -99,7 +100,7 @@ Python 3.11, CustomTkinter, Pillow, requests. แพ็กด้วย PyInstall
 
 - multipart: `photo`, `sha256` (ของไฟล์ต้นฉบับ), `uploader`, `sport`, `position`, `originalName` + header `X-IEPhoto-Code`
 - ขั้นตอน: ตรวจรหัส, ตรวจว่าเป็นรูปจริง (`getimagesize`), ตรวจขนาดไม่เกิน 95MB, ดูว่า `sha256` + รหัสนี้เคยรับแล้วหรือไม่ (ตาราง/ไฟล์ `desktop_seen.json` ล็อกด้วย flock) ถ้าเคยรับ คืนชื่อเดิม (HTTP 200, `duplicate: true`)
-- ถ้ายังไม่เคยรับ: `allocateName()` เดิม แล้วหาโฟลเดอร์ย่อยด้วยโค้ดเดียวกับ `/upload` (แยกตามกีฬา/ชื่อช่างภาพเหมือนเดิมทุกอย่าง) ต่างกันแค่โฟลเดอร์รากเปลี่ยนเป็น `folder` ของรหัส, **ไม่เรียก `watermark()`**, `recordHistory()` พร้อม `source: "desktop"`
+- ถ้ายังไม่เคยรับ: `allocateName()` เดิม แล้วหาโฟลเดอร์ย่อยด้วยโค้ดเดียวกับ `/upload` (แยกตามกีฬา/ชื่อช่างภาพเหมือนเดิมทุกอย่าง) โฟลเดอร์ = `<albums root>/<album ของรหัส หรือ sport ที่ส่งมา>/<ชื่อช่างภาพ>/` ชื่อต้องอยู่ใน venue registry, **ไม่เรียก `watermark()`**, `recordHistory()` พร้อม `source: "desktop"`
 - คืน `{ "name": "IEPHOTO@KMTIL_1234.jpg", "duplicate": false }`
 - `/upload` เดิมไม่เปลี่ยนพฤติกรรม
 
@@ -107,7 +108,7 @@ Python 3.11, CustomTkinter, Pillow, requests. แพ็กด้วย PyInstall
 
 - การข้ามลายน้ำมีเฉพาะที่ `/desktop/upload` ที่ต้องมีรหัสถูกต้องเท่านั้น
 - รหัสเก็บเป็นแฮช, มีวันหมดอายุ, ยกเลิกได้
-- เขียนไฟล์ได้เฉพาะโฟลเดอร์ที่กำหนดในรหัส และต้องอยู่ใน scan scope
+- เขียนไฟล์ได้เฉพาะโฟลเดอร์อัลบั้มที่ลงทะเบียนแล้วใน venue registry
 
 ## 5. Repo และการปล่อยเวอร์ชัน
 
@@ -131,4 +132,5 @@ Python 3.11, CustomTkinter, Pillow, requests. แพ็กด้วย PyInstall
 
 - ไฟล์ติดตั้งไม่มีลายเซ็นดิจิทัล: Windows เตือน SmartScreen, Mac ต้องคลิกขวาแล้วเลือก Open
 - คุณภาพการคำนวณสีของ Pillow กับ Imagick ต่างกันเล็กน้อยที่ระดับบีบอัด JPEG มองด้วยตาไม่ออก
+- อัปโหลดผ่านโปรแกรมไม่ส่งไฟล์ต้นฉบับ (ไม่มีลายน้ำ) ขึ้นเซิร์ฟเวอร์ คลังต้นฉบับใน appdata จึงไม่มีรูปจากโปรแกรม ต้นฉบับอยู่ในเครื่องช่างภาพ
 - ถ้าเครื่องช่างภาพช้ามาก การใส่ลายน้ำอาจช้ากว่าเซิร์ฟเวอร์ แต่ไม่ทำให้เซิร์ฟเวอร์ช้าลงสำหรับผู้ชมรูป

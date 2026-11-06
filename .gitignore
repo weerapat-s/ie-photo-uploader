@@ -12,3 +12,5 @@ state.json
 settings.json
 *.log
 .env
+*.egg-info/
+client/e2e/

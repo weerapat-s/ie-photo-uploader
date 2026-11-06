@@ -1,0 +1,27 @@
+<?xml version="1.0"?>
+<info xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:noNamespaceSchemaLocation="https://apps.nextcloud.com/schema/apps/info.xsd">
+    <id>iephoto_watermark</id>
+    <name>IE Photo Watermark</name>
+    <summary>Rename and watermark newly uploaded photos</summary>
+    <description>Web uploader that renames photos, creates photographer folders, and applies a selectable watermark position.</description>
+	<version>1.54.2</version>
+    <licence>agpl</licence>
+    <author>IE Photo</author>
+    <namespace>IEPhotoWatermark</namespace>
+    <category>files</category>
+    <navigations>
+        <navigation>
+            <name>IE Photo Upload</name>
+            <route>iephoto_watermark.page.index</route>
+            <order>25</order>
+        </navigation>
+    </navigations>
+    <types>
+        <filesystem/>
+    </types>
+    <dependencies>
+        <nextcloud min-version="33" max-version="33"/>
+        <php min-version="8.2"/>
+    </dependencies>
+</info>
