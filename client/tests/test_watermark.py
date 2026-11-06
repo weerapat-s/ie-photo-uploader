@@ -107,3 +107,39 @@ def test_apply_rejects_unsupported_extension(tmp_path, logo_bytes):
     Image.new("RGB", (10, 10)).save(p)
     with pytest.raises(ValueError):
         wm.apply(p, logo_bytes, "center", 100, "white")
+
+
+def test_apply_image_equals_apply_on_file(tmp_path, logo_bytes):
+    src = make_jpeg(tmp_path / "q.jpg", size=(640, 480), colour=(120, 60, 30), exif_orientation=6)
+    with Image.open(src) as opened:
+        from PIL import ImageOps
+        oriented = ImageOps.exif_transpose(opened)
+        oriented.load()
+    before = oriented.tobytes()
+    mem = wm.apply_image(oriented, logo_bytes, "bottom-right", 70, "white")
+    assert oriented.tobytes() == before                       # input not mutated
+    from_file = _open(wm.apply(src, logo_bytes, "bottom-right", 70, "white")[0]).convert("RGB")
+    assert mem.size == from_file.size == (480, 640)
+    # apply() JPEG-encodes; compare with the same encode of the in-memory result
+    buf = io.BytesIO()
+    mem.save(buf, "JPEG", quality=wm.JPEG_QUALITY, subsampling=0, optimize=True)
+    assert _open(buf.getvalue()).convert("RGB").tobytes() == from_file.tobytes()
+
+
+@pytest.mark.parametrize("position", wm.POSITIONS)
+def test_region_composite_matches_full_rgba_for_jpeg(tmp_path, logo_bytes, position):
+    import random
+    rnd = random.Random(1)
+    img = Image.frombytes("RGB", (333, 211), bytes(rnd.randrange(256) for _ in range(333 * 211 * 3)))
+    got = wm.apply_image(img, logo_bytes, position, 65, "white", keep_alpha=False)
+    full = img.convert("RGBA")
+    logo = wm.prepare_logo(logo_bytes, wm.php_round(full.width * wm.WIDTH_RATIO), "white", 65)
+    full.alpha_composite(logo, wm.logo_box(full.width, full.height, logo.width, logo.height, position))
+    assert got.mode == "RGB"
+    assert got.tobytes() == full.convert("RGB").tobytes()
+
+
+def test_apply_image_png_alpha_keeps_alpha(logo_bytes):
+    img = Image.new("RGBA", (300, 200), (10, 10, 10, 128))
+    out = wm.apply_image(img, logo_bytes, "center", 100, "white")
+    assert out.mode == "RGBA" and out.getpixel((0, 0))[3] == 128

@@ -66,6 +66,35 @@ def prepare_logo(logo_png: bytes, target_width: int, colour: str, opacity: int) 
     return painted
 
 
+def apply_image(img: Image.Image, logo_png: bytes, position: str, opacity: int, colour: str,
+                keep_alpha: bool | None = None, inplace: bool = False) -> Image.Image:
+    """In-memory core of apply(). img must already be EXIF-oriented.
+
+    Without alpha the image stays RGB and only the logo-sized region goes through RGBA, so a
+    24 MP photo is never copied as a full RGBA buffer. Images that keep alpha (PNG/WEBP) use the
+    full RGBA path. keep_alpha=None means "keep it if the image has any alpha-capable mode".
+    """
+    if keep_alpha is None:
+        keep_alpha = img.mode in ("RGBA", "LA", "P")
+    if keep_alpha:
+        base = img.convert("RGBA")
+        logo = prepare_logo(logo_png, php_round(base.width * WIDTH_RATIO), colour, opacity)
+        base.alpha_composite(logo, logo_box(base.width, base.height, logo.width, logo.height, position))
+        return base
+    if img.mode == "RGB":
+        base = img if inplace else img.copy()
+    else:
+        base = img.convert("RGB")
+    logo = prepare_logo(logo_png, php_round(base.width * WIDTH_RATIO), colour, opacity)
+    x, y = logo_box(base.width, base.height, logo.width, logo.height, position)
+    x1, y1 = min(base.width, x + logo.width), min(base.height, y + logo.height)
+    if x1 > x and y1 > y:
+        region = base.crop((x, y, x1, y1)).convert("RGBA")
+        region.alpha_composite(logo.crop((0, 0, x1 - x, y1 - y)))
+        base.paste(region.convert("RGB"), (x, y))
+    return base
+
+
 def apply(src_path, logo_png: bytes, position: str, opacity: int, colour: str) -> tuple[bytes, str]:
     """Watermark one file. Returns (encoded bytes, output extension incl. dot)."""
     ext = Path(src_path).suffix.lower()
@@ -78,10 +107,7 @@ def apply(src_path, logo_png: bytes, position: str, opacity: int, colour: str) -
         img = ImageOps.exif_transpose(opened)
         img.load()
     keep_alpha = fmt != "JPEG" and img.mode in ("RGBA", "LA", "P")
-    base = img.convert("RGBA")
-    logo = prepare_logo(logo_png, php_round(base.width * WIDTH_RATIO), colour, opacity)
-    base.alpha_composite(logo, logo_box(base.width, base.height, logo.width, logo.height, position))
-    result = base if keep_alpha else base.convert("RGB")
+    result = apply_image(img, logo_png, position, opacity, colour, keep_alpha=keep_alpha, inplace=True)
     buf = io.BytesIO()
     params = {}
     if icc:
