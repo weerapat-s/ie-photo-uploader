@@ -231,47 +231,7 @@ final class UploadService {
 
         try {
             $this->watermark($tmpPath, $outputPath, $extension, $watermarkPosition, $watermarkOpacity, $watermarkColour);
-            $written = false;
-            // Each name is now globally unique (allocateName is atomic), so there is no
-            // cross-upload collision to retry for. The loop only re-allocates if a name somehow
-            // already exists on disk, and tolerates the files_versions hook throwing after the
-            // bytes have already landed.
-            $name = $this->allocateName($extension);
-            for ($attempt = 0; $attempt < 25 && !$written; $attempt++) {
-                if ($target->nodeExists($name)) {
-                    $name = $this->allocateName($extension); // extremely rare; skip the taken number
-                    continue;
-                }
-                $stream = fopen($outputPath, 'rb');
-                if (!is_resource($stream)) {
-                    throw new \RuntimeException('อ่านภาพผลลัพธ์ไม่สำเร็จ');
-                }
-                try {
-                    $target->newFile($name, $stream);
-                    $written = true;
-                } catch (\OCP\Files\NotFoundException $e) {
-                    // files_versions post-write hook can throw AFTER the bytes are written.
-                    if ($target->nodeExists($name)) {
-                        $written = true;
-                    } else {
-                        throw $e;
-                    }
-                } catch (\Throwable $e) {
-                    // The name is ours alone; if it exists now, our write landed despite the hook.
-                    if ($target->nodeExists($name)) {
-                        $written = true;
-                    } else {
-                        throw $e;
-                    }
-                } finally {
-                    if (is_resource($stream)) {
-                        fclose($stream);
-                    }
-                }
-            }
-            if (!$written) {
-                throw new \RuntimeException('บันทึกไฟล์ผลลัพธ์ไม่สำเร็จ');
-            }
+            $name = $this->writeWithNewName($target, $outputPath, $extension);
             $this->recordHistory($originalName, $name, $uploaderName, $watermarkPosition);
             $this->logMapping([
                 'via' => 'upload',
@@ -285,6 +245,100 @@ final class UploadService {
         } finally {
             @unlink($outputPath);
         }
+    }
+
+    /**
+     * Write $localPath into $target under a freshly allocated IEPHOTO@KMTIL_#### name.
+     * Each allocated name is unique (allocateName is atomic); the loop only re-allocates if a
+     * name somehow already exists, and tolerates the files_versions hook throwing after the
+     * bytes have already landed.
+     */
+    private function writeWithNewName(Folder $target, string $localPath, string $extension): string {
+        $name = $this->allocateName($extension);
+        for ($attempt = 0; $attempt < 25; $attempt++) {
+            if ($target->nodeExists($name)) {
+                $name = $this->allocateName($extension);
+                continue;
+            }
+            $stream = fopen($localPath, 'rb');
+            if (!is_resource($stream)) {
+                throw new \RuntimeException('อ่านภาพผลลัพธ์ไม่สำเร็จ');
+            }
+            try {
+                $target->newFile($name, $stream);
+                return $name;
+            } catch (\Throwable $e) {
+                if ($target->nodeExists($name)) {
+                    return $name;
+                }
+                throw $e;
+            } finally {
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+            }
+        }
+        throw new \RuntimeException('บันทึกไฟล์ผลลัพธ์ไม่สำเร็จ');
+    }
+
+    /** @return list<array{name:string,colour:string}> */
+    public function desktopSports(): array {
+        return array_map(
+            fn (array $s): array => ['name' => $s['name'], 'colour' => $this->colourForVenue($s['venue'])],
+            $this->publicSports(),
+        );
+    }
+
+    public function colourForAlbum(string $album): string {
+        return $this->colourForVenue($this->venueForSport($album));
+    }
+
+    /** @return list<string> */
+    public function watermarkPositions(): array {
+        return self::WATERMARK_POSITIONS;
+    }
+
+    /**
+     * Store a photo the desktop app already watermarked: same checks, folder rules and naming as
+     * processUpload() with a sport, but no watermark() and no originals archive (the desktop
+     * never sends the unwatermarked original).
+     *
+     * @return array{name:string,folder:string}
+     */
+    public function storeDesktopUpload(
+        string $tmpPath,
+        string $originalName,
+        string $uploaderName,
+        string $album,
+        string $watermarkPosition,
+    ): array {
+        if (!is_file($tmpPath)) {
+            throw new \RuntimeException('ไม่พบไฟล์ชั่วคราว');
+        }
+        $extension = strtolower(pathinfo($originalName, PATHINFO_EXTENSION));
+        if (!in_array($extension, self::EXTENSIONS, true)) {
+            throw new \RuntimeException('รองรับเฉพาะ JPG, JPEG, PNG และ WebP');
+        }
+        if (@getimagesize($tmpPath) === false || !$this->isCompleteImage($tmpPath, $extension)) {
+            throw new \RuntimeException('ไฟล์ไม่สมบูรณ์ ลองส่งใหม่');
+        }
+        $uploaderName = $this->normalizeUploaderName($uploaderName);
+        if (!in_array($watermarkPosition, self::WATERMARK_POSITIONS, true)) {
+            throw new \RuntimeException('ตำแหน่งลายน้ำไม่ถูกต้อง');
+        }
+        $albumFolder = $this->resolveSportFolder($album);       // registry only: unknown name throws
+        $target = $this->uploaderTargetFolder($uploaderName, $albumFolder);
+        $name = $this->writeWithNewName($target, $tmpPath, $extension);
+        $this->recordHistory($originalName, $name, $uploaderName, $watermarkPosition);
+        $this->logMapping([
+            'via' => 'desktop',
+            'source' => basename($originalName),
+            'output' => $name,
+            'folder' => $uploaderName,
+            'album' => $album,
+            'position' => $watermarkPosition,
+        ]);
+        return ['name' => $name, 'folder' => $uploaderName];
     }
 
     /**
