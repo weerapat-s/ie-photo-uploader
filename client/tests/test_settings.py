@@ -28,3 +28,21 @@ def test_defaults(tmp_path):
     keyring.set_keyring(MemKeyring())
     s = Settings(tmp_path)
     assert (s.code, s.uploader, s.position, s.opacity) == ("", "", "top-left", 100)
+
+
+def test_corrupt_values_fall_back_to_defaults(tmp_path):
+    keyring.set_keyring(MemKeyring())
+    (tmp_path / "settings.json").write_text('{"opacity": "abc", "position": 5, "uploader": 7}', encoding="utf-8")
+    s = Settings(tmp_path)
+    assert (s.uploader, s.position, s.opacity) == ("", "top-left", 100)
+
+
+def test_opacity_clamped_and_position_validated(tmp_path):
+    keyring.set_keyring(MemKeyring())
+    (tmp_path / "settings.json").write_text('{"opacity": 3, "position": "nowhere"}', encoding="utf-8")
+    s = Settings(tmp_path)
+    assert (s.position, s.opacity) == ("top-left", 10)
+    (tmp_path / "settings.json").write_text('{"opacity": 500}', encoding="utf-8")
+    assert Settings(tmp_path).opacity == 100
+    (tmp_path / "settings.json").write_text('[1, 2]', encoding="utf-8")
+    assert Settings(tmp_path).opacity == 100
