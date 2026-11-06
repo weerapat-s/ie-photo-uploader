@@ -1,0 +1,44 @@
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: client/dist/IE-PHOTO-Uploader-Setup.exe
+          - os: macos-14          # Apple Silicon
+            artifact: client/dist/IE-PHOTO-Uploader-arm64.dmg
+          - os: macos-13          # Intel iMacs
+            artifact: client/dist/IE-PHOTO-Uploader-intel.dmg
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: client
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+      - run: pyinstaller --noconfirm packaging/ie_uploader.spec
+      - name: Windows installer
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # ISCC.exe (Inno Setup 6) is preinstalled on windows-latest runners.
+          $env:APP_VERSION = "${{ github.ref_name }}".TrimStart('v')
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" packaging\installer.iss
+      - name: macOS dmg
+        if: runner.os == 'macOS'
+        run: |
+          ARCH=$([ "$(uname -m)" = arm64 ] && echo arm64 || echo intel)
+          hdiutil create -volname "IE-PHOTO Uploader" -srcfolder "dist/IE-PHOTO Uploader.app" -ov -format UDZO "dist/IE-PHOTO-Uploader-$ARCH.dmg"
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact }}
