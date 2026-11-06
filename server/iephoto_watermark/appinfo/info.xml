@@ -5,7 +5,7 @@
     <name>IE Photo Watermark</name>
     <summary>Rename and watermark newly uploaded photos</summary>
     <description>Web uploader that renames photos, creates photographer folders, and applies a selectable watermark position.</description>
-	<version>1.54.2</version>
+	<version>1.55.0</version>
     <licence>agpl</licence>
     <author>IE Photo</author>
     <namespace>IEPhotoWatermark</namespace>
@@ -24,4 +24,7 @@
         <nextcloud min-version="33" max-version="33"/>
         <php min-version="8.2"/>
     </dependencies>
+    <commands>
+        <command>OCA\IEPhotoWatermark\Command\DesktopCode</command>
+    </commands>
 </info>
