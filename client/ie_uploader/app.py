@@ -1,6 +1,7 @@
 """IE-PHOTO Uploader window."""
 from __future__ import annotations
 
+import hashlib
 import queue
 import threading
 from pathlib import Path
@@ -8,13 +9,17 @@ from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
 from tkinterdnd2 import DND_FILES, TkinterDnD
-from PIL import Image
+from PIL import Image, ImageOps
 
 from . import __version__, watermark
-from .pipeline import Pipeline, RunSettings, scan
+from .pipeline import Pipeline, RunSettings, Summary, scan
 from .settings import Settings
 from .state import State, state_path
 from .uploader import AuthError, Client, TransientError, pick_base_url
+
+PREVIEW_SOURCE_PX = 1600      # longest side of the cached preview source
+PREVIEW_DEBOUNCE_MS = 250
+LOGO_MISMATCH = "โลโก้จากเซิร์ฟเวอร์ไม่ตรงกัน ลองเชื่อมต่อใหม่"
 
 POS_LABELS = {
     "top-left": "ซ้ายบน", "top-center": "กลางบน", "top-right": "ขวาบน",
@@ -37,7 +42,13 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self.config_data = None
         self.logo = None
         self.folder: Path | None = None
+        self.files: list[Path] = []
+        self.running = False
+        self._preview_src: Image.Image | None = None
+        self._preview_job = None
+        self._preview_img = None
         self._build()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._drain)
 
     # ---------- layout ----------
@@ -51,7 +62,8 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.CTkLabel(top, text="ชื่อช่างภาพ").grid(row=1, column=0, sticky="w", padx=8, pady=4)
         self.name_var = ctk.StringVar(value=self.settings.uploader)
         ctk.CTkEntry(top, textvariable=self.name_var, width=260).grid(row=1, column=1, padx=8)
-        ctk.CTkButton(top, text="เชื่อมต่อ", command=self._connect).grid(row=0, column=2, rowspan=2, padx=8)
+        self.connect_btn = ctk.CTkButton(top, text="เชื่อมต่อ", command=self._connect)
+        self.connect_btn.grid(row=0, column=2, rowspan=2, padx=8)
         self.event_label = ctk.CTkLabel(top, text="ยังไม่ได้เชื่อมต่อ", text_color="#6f6880")
         self.event_label.grid(row=2, column=0, columnspan=3, sticky="w", padx=8)
 
@@ -111,7 +123,16 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                 return s["colour"]
         return "black"
 
+    def _on_close(self):
+        if self.running:
+            if not messagebox.askyesno("IE-PHOTO", "ยังส่งรูปไม่เสร็จ ปิดโปรแกรมแล้วหยุดการส่งหรือไม่? (เปิดใหม่แล้วส่งต่อได้)"):
+                return
+            self.stop.set()
+        self.destroy()
+
     def _connect(self):
+        if self.running:
+            return
         code = self.code_var.get().strip()
         if not code or not self.name_var.get().strip():
             messagebox.showwarning("IE-PHOTO", "ใส่รหัสงานและชื่อช่างภาพก่อน")
@@ -123,6 +144,10 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                 client = Client(pick_base_url(), code)
                 cfg = client.config()
                 logo = client.logo(cfg["logoUrl"])
+                expected = str(cfg.get("logoSha256") or "").strip().lower()
+                if expected and hashlib.sha256(logo).hexdigest() != expected:
+                    self.events.put(("logo_mismatch",))
+                    return
                 self.events.put(("connected", client, cfg, logo))
             except AuthError:
                 self.events.put(("error", "รหัสงานไม่ถูกต้องหรือหมดอายุ ขอรหัสใหม่จากแอดมิน"))
@@ -131,11 +156,15 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         threading.Thread(target=work, daemon=True).start()
 
     def _choose_folder(self):
+        if self.running:
+            return
         chosen = filedialog.askdirectory()
         if chosen:
             self._set_folder(Path(chosen))
 
     def _on_drop(self, event):
+        if self.running:
+            return
         paths = self.tk.splitlist(event.data)
         if paths:
             p = Path(paths[0])
@@ -143,41 +172,72 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _set_folder(self, folder: Path):
         self.folder = folder
-        files = scan(folder)
-        self.drop.configure(text=f"{folder}  ·  {len(files)} รูป")
+        self.files = scan(folder)
+        self._preview_src = self._load_preview_source(self.files[0]) if self.files else None
+        self.drop.configure(text=f"{folder}  ·  {len(self.files)} รูป")
         self._refresh_preview()
         self._update_start()
 
+    @staticmethod
+    def _load_preview_source(path: Path) -> Image.Image | None:
+        """Downscaled, EXIF-oriented RGB copy of the first image, computed once per folder."""
+        try:
+            with Image.open(path) as im:
+                if im.format == "JPEG":
+                    im.draft("RGB", (PREVIEW_SOURCE_PX, PREVIEW_SOURCE_PX))
+                img = ImageOps.exif_transpose(im)
+                img.load()
+            img = img.convert("RGB") if img.mode != "RGB" else img
+            img.thumbnail((PREVIEW_SOURCE_PX, PREVIEW_SOURCE_PX), Image.LANCZOS)
+            return img
+        except Exception:
+            return None
+
     def _refresh_preview(self):
         self.colour_label.configure(text=f"สีลายน้ำ: {'ขาว' if self._colour() == 'white' else 'ดำ'}")
-        if not (self.folder and self.logo):
+        if self._preview_job is not None:
+            self.after_cancel(self._preview_job)
+        self._preview_job = self.after(PREVIEW_DEBOUNCE_MS, self._render_preview)
+
+    def _render_preview(self):
+        self._preview_job = None
+        if not (self._preview_src is not None and self.logo):
             return
-        files = scan(self.folder)
-        if not files:
+        try:
+            img = watermark.apply_image(self._preview_src, self.logo, self._position(),
+                                        int(self.opacity.get()), self._colour(), keep_alpha=False)
+            img.thumbnail((320, 180))
+        except Exception:
             return
-        import io
-        data, _ = watermark.apply(files[0], self.logo, self._position(), int(self.opacity.get()), self._colour())
-        img = Image.open(io.BytesIO(data))
-        img.thumbnail((320, 180))
-        self.preview.configure(image=ctk.CTkImage(img, size=img.size), text="")
+        self._preview_img = ctk.CTkImage(img, size=img.size)
+        self.preview.configure(image=self._preview_img, text="")
 
     def _update_start(self):
-        ready = self.client is not None and self.folder is not None
+        ready = self.client is not None and self.folder is not None and not self.running
         self.start_btn.configure(state="normal" if ready else "disabled")
 
     def _start(self):
         self.settings.save(self.code_var.get(), self.name_var.get(), self._position(), int(self.opacity.get()))
-        files = scan(self.folder)
+        files = list(self.files) or scan(self.folder)
         state = State(state_path(self.settings.dir, self.settings.code))
         run = RunSettings(uploader=self.name_var.get().strip(), sport=self.sport_menu.get(),
                           position=self._position(), opacity=int(self.opacity.get()),
                           colour=self._colour(), logo=self.logo)
         self.stop.clear()
+        self.running = True
         self.failed_box.delete("1.0", "end")
         self.start_btn.configure(state="disabled")
+        self.connect_btn.configure(state="disabled")
         self.stop_btn.configure(state="normal")
         pipe = Pipeline(self.client, state, run, on_event=self.events.put)
-        threading.Thread(target=lambda: self.events.put(("done", pipe.run(files, self.stop))), daemon=True).start()
+
+        def work():
+            try:
+                summary = pipe.run(files, self.stop)
+            except Exception as exc:          # the UI must always get its "done"
+                summary = Summary(total=len(files), error=f"{type(exc).__name__}: {exc}")
+            self.events.put(("done", summary))
+        threading.Thread(target=work, daemon=True).start()
 
     # ---------- event pump (UI thread) ----------
     def _drain(self):
@@ -201,10 +261,19 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                 self._update_start()
             elif kind == "error":
                 self.event_label.configure(text=ev[1])
+            elif kind == "logo_mismatch":
+                self.client = self.logo = None
+                self.event_label.configure(text=LOGO_MISMATCH)
+                self._update_start()
             elif kind == "done":
                 s = ev[1]
+                self.running = False
                 self.stop_btn.configure(state="disabled")
+                self.connect_btn.configure(state="normal")
                 self._update_start()
+                if s.error:
+                    self.status.configure(text=f"เกิดข้อผิดพลาด: {s.error}")
+                    return
                 rate = s.uploaded / s.seconds if s.seconds else 0
                 self.status.configure(text=f"เสร็จ: ส่ง {s.uploaded} · ข้าม (เคยส่งแล้ว) {s.skipped} · ไม่สำเร็จ {len(s.failed)} · {rate:.1f} รูป/วินาที")
                 if s.auth_error:
