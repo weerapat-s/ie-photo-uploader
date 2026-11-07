@@ -880,6 +880,23 @@ final class UploadService {
      * everyone allowed to *view* the album, and reusing it here would let any viewer write into
      * it. Uploads stay confined to a direct child of the albums root.
      */
+    /** Album name an upload link token points at, or null when the token is unknown or its album is gone. */
+    public function albumNameForUploadToken(string $token): ?string {
+        $token = trim($token);
+        if (preg_match('/^[A-Za-z0-9]{8,64}$/', $token) !== 1) {
+            return null;
+        }
+        $name = $this->uploadTokens()[$token] ?? '';
+        if ($name === '') {
+            return null;
+        }
+        try {
+            return $this->albumsRootFolder()->nodeExists($name) ? $name : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
+
     private function albumFolderFromUploadToken(string $token): ?Folder {
         $token = trim($token);
         if ($token === '') {

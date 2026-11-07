@@ -1,8 +1,10 @@
 """Talks to /apps/iephoto_watermark/desktop/* on the IE-PHOTO Nextcloud."""
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
+from urllib.parse import parse_qs, urlsplit
 
 import requests
 
@@ -28,6 +30,23 @@ class UploadResult:
     name: str | None = None
     duplicate: bool = False
     error: str | None = None
+
+
+def parse_credential(text: str) -> str:
+    """What the user pasted -> the value sent to the server.
+
+    A pasted album upload link (``https://.../apps/iephoto_watermark/?album=TOKEN``) becomes
+    ``link:TOKEN``; anything else is treated as a per-event code and kept as typed."""
+    text = (text or "").strip()
+    if "album=" in text:
+        try:
+            query = parse_qs(urlsplit(text if "://" in text else "https://x/?" + text.split("?", 1)[-1]).query)
+        except ValueError:
+            query = {}
+        token = (query.get("album") or [""])[0].strip()
+        if re.fullmatch(r"[A-Za-z0-9]{8,64}", token):
+            return "link:" + token
+    return text
 
 
 def pick_base_url(probe=requests.get) -> str:

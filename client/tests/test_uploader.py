@@ -109,3 +109,16 @@ def test_config_403_raises_http_error_not_auth_error():
     responses.get(CFG, status=403)
     with pytest.raises(requests.HTTPError):
         client().config()
+
+
+def test_parse_credential_link_and_code():
+    tok = "0123456789abcdef01234567"
+    link = f"https://nextcloud.ienas.site/apps/iephoto_watermark/?album={tok}"
+    assert up.parse_credential(link) == f"link:{tok}"
+    assert up.parse_credential(f"  {link}  ") == f"link:{tok}"
+    assert up.parse_credential(f"{link}&x=1") == f"link:{tok}"
+    assert up.parse_credential(f"?album={tok}") == f"link:{tok}"
+    # a bad token in a link is left alone so the server rejects it (401), never mis-parsed
+    assert up.parse_credential("https://x/?album=../etc") == "https://x/?album=../etc"
+    assert up.parse_credential("AAAAA-BBBBB-CCCCC-DDDDD") == "AAAAA-BBBBB-CCCCC-DDDDD"
+    assert up.parse_credential("") == ""

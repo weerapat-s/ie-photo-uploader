@@ -15,7 +15,7 @@ from . import __version__, watermark
 from .pipeline import Pipeline, RunSettings, Summary, scan
 from .settings import Settings
 from .state import State, state_path
-from .uploader import AuthError, Client, TransientError, pick_base_url
+from .uploader import AuthError, Client, TransientError, parse_credential, pick_base_url
 
 PREVIEW_SOURCE_PX = 1600      # longest side of the cached preview source
 PREVIEW_DEBOUNCE_MS = 250
@@ -182,9 +182,9 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
 
         c1 = self._card(left, 1, "เชื่อมต่องาน")
         c1.pack(fill="x", pady=(0, 10))
-        self._field(c1, "รหัสงาน (ขอจากแอดมิน เช่น XXXXX-XXXXX-XXXXX-XXXXX)")
+        self._field(c1, "ลิงก์งาน หรือ รหัสงาน (ขอจากแอดมิน วางได้เลย)")
         self.code_var = ctk.StringVar(value=self.settings.code)
-        self._entry(c1, self.code_var, secret=True)
+        self._entry(c1, self.code_var)
         self._field(c1, "ชื่อช่างภาพ (ชื่อโฟลเดอร์ที่รูปจะไปอยู่ เช่น สมชาย ใจดี)")
         self.name_var = ctk.StringVar(value=self.settings.uploader)
         self._entry(c1, self.name_var)
@@ -321,9 +321,9 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
     def _connect(self):
         if self.running:
             return
-        code = self.code_var.get().strip()
+        code = parse_credential(self.code_var.get())
         if not code or not self.name_var.get().strip():
-            messagebox.showwarning("IE-PHOTO", "ใส่รหัสงานและชื่อช่างภาพก่อน")
+            messagebox.showwarning("IE-PHOTO", "ใส่ลิงก์งานหรือรหัสงาน และชื่อช่างภาพก่อน")
             return
         self._set_connection("กำลังเชื่อมต่อ…", "busy")
 
@@ -338,7 +338,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                     return
                 self.events.put(("connected", client, cfg, logo))
             except AuthError:
-                self.events.put(("error", "รหัสงานไม่ถูกต้องหรือหมดอายุ ขอรหัสใหม่จากแอดมิน"))
+                self.events.put(("error", "ลิงก์หรือรหัสงานไม่ถูกต้องหรือหมดอายุ ขอใหม่จากแอดมิน"))
             except (TransientError, Exception) as exc:
                 self.events.put(("error", f"เชื่อมต่อเซิร์ฟเวอร์ไม่ได้: {exc}"))
         threading.Thread(target=work, daemon=True).start()
@@ -417,7 +417,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self._set_start_look(ready)
 
     def _start(self):
-        self.settings.save(self.code_var.get(), self.name_var.get(), self._position(), int(self.opacity.get()))
+        self.settings.save(parse_credential(self.code_var.get()), self.name_var.get(), self._position(), int(self.opacity.get()))
         files = list(self.files) or scan(self.folder)
         state = State(state_path(self.settings.dir, self.settings.code))
         run = RunSettings(uploader=self.name_var.get().strip(), sport=self.sport_menu.get(),
@@ -485,7 +485,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                     self.percent_label.configure(text="100%")
                 self.status.configure(text=f"เสร็จ: ส่ง {s.uploaded} · ข้าม (เคยส่งแล้ว) {s.skipped} · ไม่สำเร็จ {len(s.failed)} · {rate:.1f} รูป/วินาที")
                 if s.auth_error:
-                    messagebox.showerror("IE-PHOTO", "รหัสงานไม่ถูกต้องหรือหมดอายุ ขอรหัสใหม่จากแอดมิน")
+                    messagebox.showerror("IE-PHOTO", "ลิงก์หรือรหัสงานไม่ถูกต้องหรือหมดอายุ ขอใหม่จากแอดมิน")
             return
         if ev.kind == "progress":
             frac = ev.done / max(1, ev.total)

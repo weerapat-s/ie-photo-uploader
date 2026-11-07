@@ -32,7 +32,22 @@ final class DesktopController extends Controller {
 
     /** @return array<string,mixed>|null */
     private function codeRecord(): ?array {
-        return $this->codes->verify((string)$this->request->getHeader('X-IEPhoto-Code'));
+        $value = trim((string)$this->request->getHeader('X-IEPhoto-Code'));
+        // "link:TOKEN" = the album's existing public upload link (?album=TOKEN) pasted into the app.
+        if (str_starts_with($value, 'link:')) {
+            $token = substr($value, 5);
+            $album = $this->uploads->albumNameForUploadToken($token);
+            if ($album === null) {
+                return null;
+            }
+            return [
+                'id' => substr(hash('sha256', 'link:' . $token), 0, 12),
+                'label' => $album,
+                'album' => $album,
+                'expiresAt' => 0,
+            ];
+        }
+        return $this->codes->verify($value);
     }
 
     #[PublicPage]
