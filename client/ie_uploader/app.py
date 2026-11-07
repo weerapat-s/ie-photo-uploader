@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import queue
+import sys
 import threading
 import webbrowser
 from pathlib import Path
+import tkinter as tk
 from tkinter import filedialog, messagebox
 
 import customtkinter as ctk
@@ -151,7 +153,46 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                              fg_color=SOFT, border_color=LINE, text_color=INK,
                              font=self.f_body, show="•" if secret else "")
         entry.pack(fill="x", padx=16)
+        self._enable_clipboard(entry)
         return entry
+
+    @staticmethod
+    def _enable_clipboard(entry: ctk.CTkEntry) -> None:
+        """Ctrl+C/V/X/A that also work with a Thai keyboard layout, plus a right-click menu.
+
+        Tk binds copy/paste to the Latin keysyms, so with the Thai layout active Ctrl+V does
+        nothing. The hardware keycode does not change with the layout, so match on that."""
+        inner = entry._entry
+        actions = {86: "<<Paste>>", 67: "<<Copy>>", 88: "<<Cut>>"}      # V, C, X (Windows/Linux keycodes)
+
+        def ctrl_key(ev):
+            if ev.keycode in actions:
+                inner.event_generate(actions[ev.keycode])
+                return "break"
+            if ev.keycode == 65:                                        # A
+                inner.select_range(0, "end")
+                inner.icursor("end")
+                return "break"
+            return None
+
+        if sys.platform != "darwin":        # macOS Tk already maps Cmd+C/V/X independent of the layout
+            inner.bind("<Control-KeyPress>", ctrl_key)
+
+        menu = tk.Menu(inner, tearoff=0)
+        menu.add_command(label="วาง", command=lambda: inner.event_generate("<<Paste>>"))
+        menu.add_command(label="คัดลอก", command=lambda: inner.event_generate("<<Copy>>"))
+        menu.add_command(label="ตัด", command=lambda: inner.event_generate("<<Cut>>"))
+        menu.add_separator()
+        menu.add_command(label="เลือกทั้งหมด", command=lambda: (inner.select_range(0, "end"), inner.icursor("end")))
+
+        def popup(ev):
+            inner.focus_set()
+            menu.tk_popup(ev.x_root, ev.y_root)
+            return "break"
+
+        inner.bind("<Button-3>", popup)
+        if sys.platform == "darwin":
+            inner.bind("<Button-2>", popup)
 
     def _build(self):
         family = thai_font_family(self)
