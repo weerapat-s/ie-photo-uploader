@@ -36,7 +36,8 @@ def parse_credential(text: str) -> str:
     """What the user pasted -> the value sent to the server.
 
     A pasted album upload link (``https://.../apps/iephoto_watermark/?album=TOKEN``) becomes
-    ``link:TOKEN``; anything else is treated as a per-event code and kept as typed."""
+    ``link:TOKEN``; a Nextcloud folder share link (``https://.../s/TOKEN``) becomes ``share:TOKEN``;
+    anything else is treated as a per-event code and kept as typed."""
     text = (text or "").strip()
     if "album=" in text:
         try:
@@ -46,7 +47,18 @@ def parse_credential(text: str) -> str:
         token = (query.get("album") or [""])[0].strip()
         if re.fullmatch(r"[A-Za-z0-9]{8,64}", token):
             return "link:" + token
+    m = re.match(r"(?i)^https?://[^/?#\s]+/(?:index\.php/)?s/([A-Za-z0-9]{8,32})(?:[/?#]|$)", text)
+    if m:
+        return "share:" + m.group(1)
     return text
+
+
+# Reasons the server gives (401 body) -> what to tell the user.
+AUTH_MESSAGES = {
+    "share_password": "ลิงก์แชร์นี้มีรหัสผ่าน โปรแกรมใช้ไม่ได้ ให้แอดมินสร้างลิงก์ที่ไม่มีรหัสผ่าน",
+    "share_read_only": "ลิงก์แชร์นี้ดูได้อย่างเดียว ส่งรูปไม่ได้ ให้แอดมินตั้งเป็น \"แก้ไขได้\" หรือ \"อัปโหลดอย่างเดียว\"",
+    "share_not_folder": "ลิงก์แชร์นี้ไม่ใช่โฟลเดอร์ ใช้ส่งรูปไม่ได้",
+}
 
 
 def explain_bad_link(text: str) -> str | None:
@@ -54,12 +66,9 @@ def explain_bad_link(text: str) -> str | None:
 
     Returns None for anything that should just be sent to the server (a code, or a good link)."""
     text = (text or "").strip()
-    if parse_credential(text).startswith("link:") or not re.match(r"(?i)^(https?://|www\.)", text):
+    if parse_credential(text).split(":", 1)[0] in ("link", "share") or not re.match(r"(?i)^(https?://|www\.)", text):
         return None
-    if re.search(r"/s/[A-Za-z0-9]+", text):
-        return ("นี่เป็นลิงก์แชร์ของ Nextcloud ใช้ส่งรูปไม่ได้ "
-                "ขอ \"ลิงก์อัปโหลดของงาน\" (มี ?album=… ต่อท้าย) หรือรหัสงานจากแอดมิน")
-    return "ลิงก์นี้ไม่ใช่ลิงก์อัปโหลดของงาน ขอ \"ลิงก์อัปโหลดของงาน\" (มี ?album=… ต่อท้าย) หรือรหัสงานจากแอดมิน"
+    return "ลิงก์นี้ใช้ไม่ได้ ให้วางลิงก์แชร์โฟลเดอร์ของ Nextcloud (มี /s/ ในลิงก์) ลิงก์อัปโหลดของงาน หรือรหัสงาน"
 
 
 def pick_base_url(probe=requests.get) -> str:

@@ -18,7 +18,7 @@ from . import __version__, updater, watermark
 from .pipeline import Pipeline, RunSettings, Summary, scan
 from .settings import Settings
 from .state import State, state_path
-from .uploader import AuthError, Client, TransientError, explain_bad_link, parse_credential, pick_base_url
+from .uploader import AUTH_MESSAGES, AuthError, Client, TransientError, explain_bad_link, parse_credential, pick_base_url
 
 PREVIEW_SOURCE_PX = 1600      # longest side of the cached preview source
 PREVIEW_DEBOUNCE_MS = 250
@@ -355,7 +355,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _colour(self) -> str:
         for s in (self.config_data or {}).get("sports", []):
-            if s["name"] == self.sport_menu.get():
+            if (s.get("label") or s["name"]) == self.sport_menu.get():
                 return s["colour"]
         return "black"
 
@@ -389,8 +389,8 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                     self.events.put(("logo_mismatch",))
                     return
                 self.events.put(("connected", client, cfg, logo))
-            except AuthError:
-                self.events.put(("error", "ลิงก์หรือรหัสงานไม่ถูกต้องหรือหมดอายุ ขอใหม่จากแอดมิน"))
+            except AuthError as exc:
+                self.events.put(("error", AUTH_MESSAGES.get(str(exc), "ลิงก์หรือรหัสงานไม่ถูกต้องหรือหมดอายุ ขอใหม่จากแอดมิน")))
             except (TransientError, Exception) as exc:
                 self.events.put(("error", f"เชื่อมต่อเซิร์ฟเวอร์ไม่ได้: {exc}"))
         threading.Thread(target=work, daemon=True).start()
@@ -566,7 +566,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             kind = ev[0]
             if kind == "connected":
                 _, self.client, self.config_data, self.logo = ev
-                names = [s["name"] for s in self.config_data["sports"]] or ["—"]
+                names = [s.get("label") or s["name"] for s in self.config_data["sports"]] or ["—"]
                 self.sport_menu.configure(values=names)
                 self.sport_menu.set(names[0])
                 via = "ช่องทางด่วน" if self.client.base.startswith("http://100.") else "อินเทอร์เน็ต"

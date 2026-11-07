@@ -124,12 +124,16 @@ def test_parse_credential_link_and_code():
     assert up.parse_credential("") == ""
 
 
-def test_explain_bad_link():
+def test_share_link_and_bad_link():
+    assert up.parse_credential("https://nextcloud.ienas.site/s/9H8WTJ2kXnGdb2G") == "share:9H8WTJ2kXnGdb2G"
+    assert up.parse_credential("  https://nextcloud.ienas.site/index.php/s/9H8WTJ2kXnGdb2G/ ") == "share:9H8WTJ2kXnGdb2G"
+    assert up.parse_credential("https://nextcloud.ienas.site/s/9H8WTJ2kXnGdb2G?path=%2Fa") == "share:9H8WTJ2kXnGdb2G"
+    assert up.parse_credential("https://x.test/s/short") == "https://x.test/s/short"          # too short to be a token
     tok = "0123456789abcdef01234567"
     assert up.explain_bad_link("") is None
-    assert up.explain_bad_link("AAAAA-BBBBB-CCCCC-DDDDD") is None                       # a code goes to the server
+    assert up.explain_bad_link("AAAAA-BBBBB-CCCCC-DDDDD") is None                            # a code goes to the server
     assert up.explain_bad_link(f"https://nextcloud.ienas.site/apps/iephoto_watermark/?album={tok}") is None
-    share = up.explain_bad_link("https://nextcloud.ienas.site/s/9H8WTJ2kXnGdb2G")
-    assert share and "ลิงก์แชร์" in share and "?album=" in share
+    assert up.explain_bad_link("https://nextcloud.ienas.site/s/9H8WTJ2kXnGdb2G") is None     # a folder share goes to the server
     other = up.explain_bad_link("https://example.com/foo")
-    assert other and "ไม่ใช่ลิงก์อัปโหลด" in other
+    assert other and "/s/" in other
+    assert set(up.AUTH_MESSAGES) == {"share_password", "share_read_only", "share_not_folder"}

@@ -30,9 +30,33 @@ final class DesktopController extends Controller {
         parent::__construct($appName, $request);
     }
 
+    /** Why the last codeRecord() call returned null; sent back so the app can explain it. */
+    private string $denyReason = 'invalid_code';
+
+    private function denied(): JSONResponse {
+        return new JSONResponse(['error' => $this->denyReason], 401);
+    }
+
     /** @return array<string,mixed>|null */
     private function codeRecord(): ?array {
         $value = trim((string)$this->request->getHeader('X-IEPhoto-Code'));
+        // "share:TOKEN" = a Nextcloud public share link (/s/TOKEN) of a folder that already accepts uploads.
+        if (str_starts_with($value, 'share:')) {
+            $token = substr($value, 6);
+            [$folder, $reason] = $this->uploads->desktopShareTarget($token);
+            if ($folder === null) {
+                $this->denyReason = $reason;
+                return null;
+            }
+            $name = $folder->getName();
+            return [
+                'id' => substr(hash('sha256', 'share:' . $token), 0, 12),
+                'label' => $name,
+                'album' => $name,
+                'expiresAt' => 0,
+                'shareToken' => $token,
+            ];
+        }
         // "link:TOKEN" = the album's existing public upload link (?album=TOKEN) pasted into the app.
         if (str_starts_with($value, 'link:')) {
             $token = substr($value, 5);
@@ -56,12 +80,20 @@ final class DesktopController extends Controller {
     public function config(): JSONResponse {
         $record = $this->codeRecord();
         if ($record === null) {
-            return new JSONResponse(['error' => 'invalid_code'], 401);
+            return $this->denied();
         }
         $album = (string)($record['album'] ?? '');
-        $sports = $album !== ''
-            ? [['name' => $album, 'colour' => $this->uploads->colourForAlbum($album)]]
-            : $this->uploads->desktopSports();
+        if (isset($record['shareToken'])) {
+            // Any folder: the photographer picks the watermark colour (white indoors, black outdoors).
+            $sports = [
+                ['name' => $album, 'colour' => 'black', 'label' => $album . ' · ลายน้ำดำ'],
+                ['name' => $album, 'colour' => 'white', 'label' => $album . ' · ลายน้ำขาว'],
+            ];
+        } else {
+            $sports = $album !== ''
+                ? [['name' => $album, 'colour' => $this->uploads->colourForAlbum($album)]]
+                : $this->uploads->desktopSports();
+        }
         $logo = dirname(__DIR__, 2) . '/img/watermark.png';
         return new JSONResponse([
             'label' => $record['label'],
@@ -85,7 +117,7 @@ final class DesktopController extends Controller {
     public function upload(): JSONResponse {
         $record = $this->codeRecord();
         if ($record === null) {
-            return new JSONResponse(['error' => 'invalid_code'], 401);
+            return $this->denied();
         }
         $file = $this->request->getUploadedFile('photo');
         $err = is_array($file) ? ($file['error'] ?? UPLOAD_ERR_NO_FILE) : UPLOAD_ERR_NO_FILE;
@@ -104,8 +136,16 @@ final class DesktopController extends Controller {
         }
         $codeId = (string)$record['id'];
         $album = (string)($record['album'] ?? '') !== '' ? (string)$record['album'] : (string)$this->request->getParam('sport', '');
+        $shareFolder = null;
+        if (isset($record['shareToken'])) {
+            [$shareFolder, $reason] = $this->uploads->desktopShareTarget((string)$record['shareToken']);
+            if ($shareFolder === null) {
+                $this->denyReason = $reason;
+                return $this->denied();
+            }
+        }
         try {
-            return $this->seen->locked($codeId, $sha, function () use ($codeId, $sha, $file, $album): JSONResponse {
+            return $this->seen->locked($codeId, $sha, function () use ($codeId, $sha, $file, $album, $shareFolder): JSONResponse {
                 $existing = $this->seen->find($codeId, $sha);
                 if ($existing !== null) {
                     return new JSONResponse(['name' => $existing, 'duplicate' => true]);
@@ -116,6 +156,7 @@ final class DesktopController extends Controller {
                     (string)$this->request->getParam('uploader', ''),
                     $album,
                     (string)$this->request->getParam('position', 'top-left'),
+                    $shareFolder,
                 );
                 try {
                     $this->seen->remember($codeId, $sha, $stored['name']);

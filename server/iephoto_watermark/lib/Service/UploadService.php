@@ -311,6 +311,7 @@ final class UploadService {
         string $uploaderName,
         string $album,
         string $watermarkPosition,
+        ?Folder $albumFolder = null,
     ): array {
         if (!is_file($tmpPath)) {
             throw new \RuntimeException('ไม่พบไฟล์ชั่วคราว');
@@ -326,7 +327,7 @@ final class UploadService {
         if (!in_array($watermarkPosition, self::WATERMARK_POSITIONS, true)) {
             throw new \RuntimeException('ตำแหน่งลายน้ำไม่ถูกต้อง');
         }
-        $albumFolder = $this->resolveSportFolder($album);       // registry only: unknown name throws
+        $albumFolder ??= $this->resolveSportFolder($album);     // registry only: unknown name throws
         $target = $this->uploaderTargetFolder($uploaderName, $albumFolder);
         $name = $this->writeWithNewName($target, $tmpPath, $extension);
         $this->recordHistory($originalName, $name, $uploaderName, $watermarkPosition);
@@ -880,6 +881,42 @@ final class UploadService {
      * everyone allowed to *view* the album, and reusing it here would let any viewer write into
      * it. Uploads stay confined to a direct child of the albums root.
      */
+    /**
+     * A pasted Nextcloud public share link (/s/TOKEN) as an upload target for the desktop app.
+     *
+     * Accepted only when the link already lets visitors add files: a public link share of a folder
+     * with the create permission and no password. The app then writes nothing the link could not
+     * already receive, it only watermarks and renames. Anything else is refused with a reason code
+     * the app turns into a message.
+     *
+     * @return array{0:?Folder,1:string} [folder, reason] - reason is '' on success
+     */
+    public function desktopShareTarget(string $token): array {
+        $token = trim($token);
+        if (preg_match('/^[A-Za-z0-9]{8,32}$/', $token) !== 1) {
+            return [null, 'invalid_code'];
+        }
+        try {
+            $share = $this->shareManager->getShareByToken($token);      // throws when missing or expired
+            if ($share->getShareType() !== \OCP\Share\IShare::TYPE_LINK) {
+                return [null, 'invalid_code'];
+            }
+            if ((string)$share->getPassword() !== '') {
+                return [null, 'share_password'];
+            }
+            if (($share->getPermissions() & \OCP\Constants::PERMISSION_CREATE) === 0) {
+                return [null, 'share_read_only'];
+            }
+            $node = $share->getNode();
+            if (!$node instanceof Folder) {
+                return [null, 'share_not_folder'];
+            }
+            return [$node, ''];
+        } catch (\Throwable) {
+            return [null, 'invalid_code'];
+        }
+    }
+
     /** Album name an upload link token points at, or null when the token is unknown or its album is gone. */
     public function albumNameForUploadToken(string $token): ?string {
         $token = trim($token);
