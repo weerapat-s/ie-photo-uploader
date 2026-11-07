@@ -221,6 +221,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                                         hover_color="#ffbf8a", text_color=INK, font=self.f_small_bold,
                                         command=self._open_update)
         self._update = None
+        self._updating = False
 
         # left column: 1 connect, 2 watermark
         left = ctk.CTkFrame(self, fg_color="transparent", width=340)
@@ -497,13 +498,55 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         if messagebox.askyesno(
                 "IE-PHOTO",
                 f"มีเวอร์ชันใหม่ {upd.version} (ตอนนี้ใช้ {__version__})\n"
-                "ควรอัปเดตเพื่อให้ได้ฟีเจอร์และการแก้ไขล่าสุด\n\nเปิดหน้าดาวน์โหลดเลยไหม?"):
+                "ควรอัปเดตเพื่อให้ได้ฟีเจอร์และการแก้ไขล่าสุด\n\n"
+                + ("อัปเดตเลยไหม? โปรแกรมจะปิด ติดตั้งให้เอง แล้วเปิดใหม่" if updater.can_self_update()
+                   else "เปิดหน้าดาวน์โหลดเลยไหม?")):
             self._open_update()
 
     def _open_update(self) -> None:
-        if self._update is not None:
-            webbrowser.open(self._update.download)
+        upd = self._update
+        if upd is None or self._updating:
+            return
+        if not updater.can_self_update():
+            webbrowser.open(upd.download)
             self.status.configure(text="ดาวน์โหลดตัวติดตั้งใหม่แล้วเปิดติดตั้งทับของเดิมได้เลย (ข้อมูลและรหัสที่ตั้งไว้ไม่หาย)")
+            return
+        if self.running and not messagebox.askyesno("IE-PHOTO", "ยังส่งรูปอยู่ อัปเดตตอนนี้จะหยุดการส่ง (เปิดใหม่แล้วส่งต่อได้) ทำต่อไหม?"):
+            return
+        self._updating = True
+        self.stop.set()
+        self.update_btn.configure(state="disabled", text="กำลังดาวน์โหลดอัปเดต… 0%")
+
+        def work():
+            try:
+                def progress(done, total):
+                    if total:
+                        self.events.put(("update_progress", int(done * 100 / total)))
+                path = updater.download(upd, progress)
+                self.events.put(("update_ready", path))
+            except updater.UpdateError as exc:
+                self.events.put(("update_failed", str(exc)))
+            except Exception as exc:                      # never leave the button stuck
+                self.events.put(("update_failed", f"อัปเดตไม่สำเร็จ: {exc}"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _finish_update(self, path) -> None:
+        try:
+            updater.launch_install(path)
+        except Exception as exc:
+            self._update_failed(f"เริ่มติดตั้งไม่สำเร็จ: {exc}")
+            return
+        self.update_btn.configure(text="กำลังติดตั้ง… โปรแกรมจะเปิดใหม่เอง")
+        self.update()
+        self.destroy()
+
+    def _update_failed(self, message: str) -> None:
+        self._updating = False
+        self.stop = threading.Event()
+        self.update_btn.configure(state="normal", text=f"⬆ มีเวอร์ชันใหม่ {self._update.version} · ลองอัปเดตอีกครั้ง")
+        self.status.configure(text=message)
+        if self._update is not None:
+            messagebox.showwarning("IE-PHOTO", message + "\nกดปุ่มอัปเดตเพื่อลองใหม่ หรือโหลดเองจากหน้า GitHub Release")
 
     # ---------- event pump (UI thread) ----------
     def _drain(self):
@@ -529,6 +572,12 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             elif kind == "update":
                 if ev[1] is not None:
                     self._show_update(ev[1])
+            elif kind == "update_progress":
+                self.update_btn.configure(text=f"กำลังดาวน์โหลดอัปเดต… {ev[1]}%")
+            elif kind == "update_ready":
+                self._finish_update(ev[1])
+            elif kind == "update_failed":
+                self._update_failed(ev[1])
             elif kind == "error":
                 self._set_connection(ev[1], "error")
             elif kind == "logo_mismatch":
