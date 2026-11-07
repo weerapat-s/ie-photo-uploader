@@ -49,6 +49,19 @@ def parse_credential(text: str) -> str:
     return text
 
 
+def explain_bad_link(text: str) -> str | None:
+    """A pasted web link that is not an album upload link: say why, so the user asks for the right thing.
+
+    Returns None for anything that should just be sent to the server (a code, or a good link)."""
+    text = (text or "").strip()
+    if parse_credential(text).startswith("link:") or not re.match(r"(?i)^(https?://|www\.)", text):
+        return None
+    if re.search(r"/s/[A-Za-z0-9]+", text):
+        return ("นี่เป็นลิงก์แชร์ของ Nextcloud ใช้ส่งรูปไม่ได้ "
+                "ขอ \"ลิงก์อัปโหลดของงาน\" (มี ?album=… ต่อท้าย) หรือรหัสงานจากแอดมิน")
+    return "ลิงก์นี้ไม่ใช่ลิงก์อัปโหลดของงาน ขอ \"ลิงก์อัปโหลดของงาน\" (มี ?album=… ต่อท้าย) หรือรหัสงานจากแอดมิน"
+
+
 def pick_base_url(probe=requests.get) -> str:
     try:
         if probe(FAST_URL + "/status.php", timeout=1.5).status_code == 200:

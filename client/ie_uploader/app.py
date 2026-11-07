@@ -18,7 +18,7 @@ from . import __version__, updater, watermark
 from .pipeline import Pipeline, RunSettings, Summary, scan
 from .settings import Settings
 from .state import State, state_path
-from .uploader import AuthError, Client, TransientError, parse_credential, pick_base_url
+from .uploader import AuthError, Client, TransientError, explain_bad_link, parse_credential, pick_base_url
 
 PREVIEW_SOURCE_PX = 1600      # longest side of the cached preview source
 PREVIEW_DEBOUNCE_MS = 250
@@ -372,6 +372,10 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         code = parse_credential(self.code_var.get())
         if not code or not self.name_var.get().strip():
             messagebox.showwarning("IE-PHOTO", "ใส่ลิงก์งานหรือรหัสงาน และชื่อช่างภาพก่อน")
+            return
+        bad = explain_bad_link(self.code_var.get())
+        if bad:
+            self._set_connection(bad, "error")
             return
         self._set_connection("กำลังเชื่อมต่อ…", "busy")
 

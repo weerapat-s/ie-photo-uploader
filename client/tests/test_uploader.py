@@ -122,3 +122,14 @@ def test_parse_credential_link_and_code():
     assert up.parse_credential("https://x/?album=../etc") == "https://x/?album=../etc"
     assert up.parse_credential("AAAAA-BBBBB-CCCCC-DDDDD") == "AAAAA-BBBBB-CCCCC-DDDDD"
     assert up.parse_credential("") == ""
+
+
+def test_explain_bad_link():
+    tok = "0123456789abcdef01234567"
+    assert up.explain_bad_link("") is None
+    assert up.explain_bad_link("AAAAA-BBBBB-CCCCC-DDDDD") is None                       # a code goes to the server
+    assert up.explain_bad_link(f"https://nextcloud.ienas.site/apps/iephoto_watermark/?album={tok}") is None
+    share = up.explain_bad_link("https://nextcloud.ienas.site/s/9H8WTJ2kXnGdb2G")
+    assert share and "ลิงก์แชร์" in share and "?album=" in share
+    other = up.explain_bad_link("https://example.com/foo")
+    assert other and "ไม่ใช่ลิงก์อัปโหลด" in other
