@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import queue
 import threading
+import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -11,7 +12,7 @@ import customtkinter as ctk
 from tkinterdnd2 import DND_FILES, TkinterDnD
 from PIL import Image, ImageOps
 
-from . import __version__, watermark
+from . import __version__, updater, watermark
 from .pipeline import Pipeline, RunSettings, Summary, scan
 from .settings import Settings
 from .state import State, state_path
@@ -129,6 +130,7 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         self._build()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(100, self._drain)
+        threading.Thread(target=lambda: self.events.put(("update", updater.check(__version__))), daemon=True).start()
 
     # ---------- layout ----------
     def _card(self, parent, step: int, title: str) -> ctk.CTkFrame:
@@ -174,6 +176,10 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.CTkLabel(titles, text="ใส่ลายน้ำบนเครื่องของคุณ แล้วส่งขึ้นคลังภาพ", text_color=MUTED,
                      font=self.f_small, anchor="w").pack(anchor="w")
         ctk.CTkLabel(header, text=f"v{__version__}", text_color=MUTED, font=self.f_small).pack(side="right")
+        self.update_btn = ctk.CTkButton(header, text="", height=30, corner_radius=15, fg_color=PEACH,
+                                        hover_color="#ffbf8a", text_color=INK, font=self.f_small_bold,
+                                        command=self._open_update)
+        self._update = None
 
         # left column: 1 connect, 2 watermark
         left = ctk.CTkFrame(self, fg_color="transparent", width=340)
@@ -442,6 +448,22 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
             self.events.put(("done", summary))
         threading.Thread(target=work, daemon=True).start()
 
+    # ---------- updates ----------
+    def _show_update(self, upd) -> None:
+        self._update = upd
+        self.update_btn.configure(text=f"⬆ มีเวอร์ชันใหม่ {upd.version} · กดเพื่ออัปเดต")
+        self.update_btn.pack(side="right", padx=(0, 12))
+        if messagebox.askyesno(
+                "IE-PHOTO",
+                f"มีเวอร์ชันใหม่ {upd.version} (ตอนนี้ใช้ {__version__})\n"
+                "ควรอัปเดตเพื่อให้ได้ฟีเจอร์และการแก้ไขล่าสุด\n\nเปิดหน้าดาวน์โหลดเลยไหม?"):
+            self._open_update()
+
+    def _open_update(self) -> None:
+        if self._update is not None:
+            webbrowser.open(self._update.download)
+            self.status.configure(text="ดาวน์โหลดตัวติดตั้งใหม่แล้วเปิดติดตั้งทับของเดิมได้เลย (ข้อมูลและรหัสที่ตั้งไว้ไม่หาย)")
+
     # ---------- event pump (UI thread) ----------
     def _drain(self):
         try:
@@ -463,6 +485,9 @@ class App(ctk.CTk, TkinterDnD.DnDWrapper):
                 self._set_connection(f"เชื่อมต่อแล้ว · งาน: {self.config_data['label']} · ผ่าน{via}", "ok")
                 self._refresh_preview()
                 self._update_start()
+            elif kind == "update":
+                if ev[1] is not None:
+                    self._show_update(ev[1])
             elif kind == "error":
                 self._set_connection(ev[1], "error")
             elif kind == "logo_mismatch":
